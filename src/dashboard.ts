@@ -2,6 +2,7 @@ import express from "express";
 import { join } from "node:path";
 import { pool } from "./db";
 import { chainView } from "./chain";
+import { financialsRouter } from "./financials";
 const q = async (sql: string, p: any[] = []) => (await pool.query(sql, p)).rows;
 
 export function apiLogger(): express.RequestHandler {
@@ -19,6 +20,7 @@ export function apiLogger(): express.RequestHandler {
 
 export function dashboardRouter() {
   const r = express.Router();
+  r.use(financialsRouter());
   r.get("/", (_q, res) => res.sendFile(join(__dirname, "..", "public", "dashboard.html")));
   r.get("/api/usage", async (req, res) => {
     const hours = Math.min(Number(req.query.hours ?? 24) || 24, 168);

@@ -43,7 +43,7 @@ X402_NETWORK=base-sepolia, FACILITATOR_URL=https://x402.org/facilitator. `npm st
 Verified 10 Oct 2026: x402.org facilitator `/supported` lists v1 exact/base-sepolia; a dummy-signed payload is rejected by
 facilitator /verify with `invalid_exact_evm_signature` (no funds moved, nothing logged).
 
-## Dashboard (read-only, local, NO AUTH — do not expose beyond localhost without adding auth)
+## Dashboard (read-only; basic auth — see "Public exposure" below)
 http://localhost:8402/dashboard/ — tabs: API usage (all /v1 calls incl. 402/409/5xx from `api_log`, 5s auto-refresh),
 Transactions (off-chain payments; on-chain payee/payer USDC balances, USDC Transfer events to payee over the last
 LOG_WINDOW_BLOCKS=3000 blocks in 200-block chunks — the public RPC's getLogs limit — and reconciliation of x402 'settled' rows
@@ -59,3 +59,8 @@ Tests use a separate database (botrec_test) and mock payments. Screenshots: `npx
 - Tunnel: `/home/box/bin/ngrok http 8402 --config /home/box/.config/ngrok/ngrok.yml,/tmp/ngrok-crl.yml` where the extra file sets
   `agent.crl_noverify: true` (the box couldn't reach ngrok's CRL endpoint; TLS is still verified, only revocation lookup is skipped).
   Free-tier URLs change on restart: update PUBLIC_BASE_URL and restart the server. Browsers see ngrok's interstitial once; API clients can send `ngrok-skip-browser-warning: 1`.
+
+## Financials tab
+/dashboard → Financials (basic auth). JSON: GET /dashboard/api/financials?from=YYYY-MM-DD&to=YYYY-MM-DD&type=bot_query_payment|advertiser_impression_charge&status=settled|verified|settle_failed|accrued&mode=x402|mock|offchain ;
+CSV: /dashboard/api/financials.csv (same filters). Wallet balances (USDC + ETH) are live Base Sepolia reads. Ledger = bot query payments (off-chain status + on-chain receipt)
+UNION advertiser impression charges with charge > 0 (ACCRUED ONLY — advertisers don't pay in yet). Totals: today (Europe/London day), 7d, all-time. Screenshot: `npx tsx scripts/screenshot-fin.ts` (reads .env creds).

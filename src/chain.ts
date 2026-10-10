@@ -10,8 +10,8 @@ export async function chainView(txs: string[]) {
   const bal = (a: `0x${string}`) => client.readContract({ address: USDC_BASE_SEPOLIA as `0x${string}`, abi: erc20Abi, functionName: "balanceOf", args: [a] });
   const out: any = { network: "base-sepolia", chain_id: 84532, usdc: USDC_BASE_SEPOLIA, payee: PAYEE, payer: PAYER, receipts: {}, transfers: [], errors: [] };
   try {
-    const [pe, pr, head] = await Promise.all([bal(PAYEE), bal(PAYER), client.getBlockNumber()]);
-    out.balances = { payee: formatUnits(pe, 6), payer: formatUnits(pr, 6) }; out.head = Number(head);
+    const [pe, pr, head, ee, er] = await Promise.all([bal(PAYEE), bal(PAYER), client.getBlockNumber(), client.getBalance({ address: PAYEE }), client.getBalance({ address: PAYER })]);
+    out.balances = { payee: formatUnits(pe, 6), payer: formatUnits(pr, 6), payee_eth: formatUnits(ee, 18), payer_eth: formatUnits(er, 18) }; out.head = Number(head);
     // public RPC caps eth_getLogs at 200 blocks; scan WINDOW blocks (~2s/block) in 200-block chunks
     const WINDOW = BigInt(process.env.LOG_WINDOW_BLOCKS ?? "3000"), CH = 200n;
     const ev = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
