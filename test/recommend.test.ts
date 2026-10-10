@@ -1,6 +1,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
+process.env.DASHBOARD_PASSWORD = "test-pass";
+const AUTH = { authorization: "Basic " + Buffer.from("admin:test-pass").toString("base64") };
 import { createApp } from "../src/app";
 import { pool } from "../src/db";
 import { seed } from "../src/seed";
@@ -12,7 +14,7 @@ before(async () => { await seed(); server = createApp().listen(0); base = `http:
 after(async () => { server.close(); await pool.end(); });
 const nonce = () => "t" + Date.now() + Math.floor(Math.random() * 1e9);
 const post = (p: string, body: any, h: Record<string, string> = {}) =>
-  fetch(base + p, { method: "POST", headers: { "content-type": "application/json", ...h }, body: JSON.stringify(body) });
+  fetch(base + p, { method: "POST", headers: { "content-type": "application/json", ...AUTH, ...h }, body: JSON.stringify(body) });
 
 test("canonical JSON is key-order independent and rejects floats", () => {
   assert.equal(canonicalize({ b: 1, a: [{ d: 2, c: "x" }] }), canonicalize({ a: [{ c: "x", d: 2 }], b: 1 }));
@@ -75,6 +77,14 @@ test("audit endpoints expose request impressions and provider spend", async () =
   const j = await (await post("/v1/recommend", { query: "Acme transcription speech to text x402", k: 3 }, { "X-PAYMENT": "mock:" + nonce() })).json();
   const a = await (await fetch(`${base}/v1/requests/${j.request_id}`)).json();
   assert.equal(a.impressions.length, j.response.results.length);
-  const sp = await (await fetch(`${base}/v1/audit/providers/adv:acme`)).json();
+  const sp = await (await fetch(`${base}/v1/audit/providers/adv:acme`, { headers: AUTH })).json();
   assert.ok(Number(sp.listings[0].spend_micro_usdc) >= 250);
+});
+
+test("auth: listings/audit need basic auth, recommend and health stay public", async () => {
+  const l = await fetch(base + "/v1/listings", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  assert.equal(l.status, 401);
+  assert.equal((await fetch(base + "/v1/audit/providers/x")).status, 401);
+  assert.equal((await fetch(base + "/v1/health")).status, 200);
+  assert.equal((await fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json" }, body: "{\"query\":\"x\"}" })).status, 402);
 });

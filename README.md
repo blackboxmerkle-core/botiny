@@ -51,3 +51,11 @@ against tx receipts), Requests (detail + "Replay & verify"), Advertisers (impres
 JSON under /dashboard/api/{usage,payments,chain,requests,requests/:id,advertisers,catalogue}. Only public addresses are used
 (PAYER_ADDRESS env, default 0x0b68…5402); PAYER_PRIVATE_KEY is never read by the server.
 Tests use a separate database (botrec_test) and mock payments. Screenshots: `npx tsx scripts/screenshot.ts` -> docs/.
+
+## Public exposure via ngrok (auth added)
+- Public: GET /v1/health, POST /v1/recommend (x402 paywall), GET /v1/requests/:id and /replay (bot-facing audit).
+- HTTP basic auth (DASHBOARD_USER=admin / DASHBOARD_PASSWORD in .env; fails closed if unset): /dashboard/**, POST /v1/listings, GET /v1/audit/providers/:id.
+- PUBLIC_BASE_URL in .env sets the x402 `resource` URL (else derived from the Host header).
+- Tunnel: `/home/box/bin/ngrok http 8402 --config /home/box/.config/ngrok/ngrok.yml,/tmp/ngrok-crl.yml` where the extra file sets
+  `agent.crl_noverify: true` (the box couldn't reach ngrok's CRL endpoint; TLS is still verified, only revocation lookup is skipped).
+  Free-tier URLs change on restart: update PUBLIC_BASE_URL and restart the server. Browsers see ngrok's interstitial once; API clients can send `ngrok-skip-browser-warning: 1`.

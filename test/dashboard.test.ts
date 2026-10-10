@@ -1,13 +1,15 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
+process.env.DASHBOARD_PASSWORD = "test-pass";
+const AUTH = { authorization: "Basic " + Buffer.from("admin:test-pass").toString("base64") };
 import { createApp } from "../src/app";
 import { pool } from "../src/db";
 import { seed } from "../src/seed";
 let base = ""; let server: any;
 before(async () => { await seed(); server = createApp().listen(0); base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`; });
 after(async () => { server.close(); await pool.end(); });
-const get = async (p: string) => { const r = await fetch(base + p); assert.equal(r.status, 200, p); return r; };
+const get = async (p: string) => { const r = await fetch(base + p, { headers: AUTH }); assert.equal(r.status, 200, p); return r; };
 
 test("dashboard serves HTML and read-only JSON APIs", async () => {
   await fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json" }, body: "{\"query\":\"dash\"}" }); // 402
@@ -25,7 +27,9 @@ test("dashboard serves HTML and read-only JSON APIs", async () => {
   assert.ok(d.impressions.every((i: any) => i.db_txid === d.db_txid));
   assert.ok(Array.isArray(await (await get("/dashboard/api/advertisers")).json()));
   assert.ok((await (await get("/dashboard/api/catalogue")).json()).length >= 31);
-  assert.equal((await fetch(base + "/dashboard/api/requests/nope")).status, 404);
+  assert.equal((await fetch(base + "/dashboard/api/requests/nope", { headers: AUTH })).status, 404);
+  assert.equal((await fetch(base + "/dashboard/")).status, 401);
+  assert.equal((await fetch(base + "/dashboard/api/usage", { headers: { authorization: "Basic " + Buffer.from("admin:wrong").toString("base64") } })).status, 401);
 });
 test("no dashboard response leaks the payer private key", async () => {
   const k = process.env.PAYER_PRIVATE_KEY;

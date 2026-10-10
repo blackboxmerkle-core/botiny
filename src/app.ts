@@ -6,16 +6,17 @@ import { normalizeInput, rank, canonicalRequest, RANKER_VERSION } from "./rank";
 import { EMBEDDING_MODEL } from "./embed";
 import { sha256 } from "./canonical";
 import { apiLogger, dashboardRouter } from "./dashboard";
+import { basicAuth } from "./auth";
 import { verifyPayment, settlePayment, requirements, MODE, NETWORK } from "./payment";
 
 export function createApp() {
   const app = express();
   app.use(express.json({ limit: "64kb" }));
   app.use(apiLogger());
-  app.use("/dashboard", dashboardRouter()); // read-only, NO AUTH: local use only
+  app.use("/dashboard", basicAuth(), dashboardRouter()); // read-only, HTTP basic auth (admin / DASHBOARD_PASSWORD)
   app.get("/v1/health", (_q, r) => r.json({ ok: true, payment_mode: MODE, network: NETWORK }));
 
-  app.post("/v1/listings", async (req, res) => {
+  app.post("/v1/listings", basicAuth(), async (req, res) => {
     const err = validateListing(req.body); if (err) return res.status(400).json({ error: err });
     res.status(201).json(await insertListing(req.body));
   });
@@ -23,7 +24,7 @@ export function createApp() {
   app.post("/v1/recommend", async (req, res) => {
     const inp = normalizeInput(req.body);
     if (typeof inp === "string") return res.status(400).json({ error: inp });
-    const resource = `${req.protocol}://${req.get("host")}/v1/recommend`;
+    const resource = `${process.env.PUBLIC_BASE_URL?.replace(/\/$/, "") ?? `${req.protocol}://${req.get("host")}`}/v1/recommend`;
     const header = req.get("X-PAYMENT");
     if (!header) return res.status(402).json({ x402Version: 1, error: "X-PAYMENT header is required", accepts: [requirements(resource)] });
     const pay = await verifyPayment(header, resource);
@@ -86,7 +87,7 @@ export function createApp() {
     const imp = (await pool.query("SELECT rank,listing_id,provider_id,charge_micro_usdc FROM impressions WHERE request_id=$1 ORDER BY rank", [req.params.id])).rows;
     res.json({ ...r, impressions: imp });
   });
-  app.get("/v1/audit/providers/:id", async (req, res) => {
+  app.get("/v1/audit/providers/:id", basicAuth(), async (req, res) => {
     const rows = (await pool.query(`SELECT i.listing_id, COUNT(*)::int AS impressions, SUM(i.charge_micro_usdc)::text AS spend_micro_usdc
       FROM impressions i WHERE i.provider_id=$1 GROUP BY i.listing_id ORDER BY i.listing_id`, [req.params.id])).rows;
     res.json({ provider_id: req.params.id, listings: rows });
