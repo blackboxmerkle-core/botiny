@@ -4,10 +4,11 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "tsx src/server.ts",
+    "start": "tsx --env-file=.env src/server.ts",
     "seed": "tsx src/seed.ts",
     "test": "tsx --test test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "start:mock": "PAYMENT_MODE=mock tsx src/server.ts"
   },
   "keywords": [],
   "author": "",

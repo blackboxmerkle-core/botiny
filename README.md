@@ -35,3 +35,10 @@ verify payment (facilitator /verify or mock) -> BEGIN REPEATABLE READ -> pin sna
 ## Real testnet payments (not yet exercised)
 Set PAYMENT_MODE=x402 and PAY_TO_ADDRESS=<your Base Sepolia receiving address>. The server needs no private key.
 A paying test client needs a Base Sepolia wallet private key funded with test ETH and test USDC (faucet.circle.com), e.g. using `x402-fetch`/`x402-axios`.
+
+## Configured testnet mode (current)
+`.env` (git-ignored; copy in `.env.example`) sets PAYMENT_MODE=x402, PAY_TO_ADDRESS=0x0e66433540a91D9683E939c8Ac17BC084571D050,
+X402_NETWORK=base-sepolia, FACILITATOR_URL=https://x402.org/facilitator. `npm start` loads it (`tsx --env-file=.env`);
+`npm run start:mock` forces mock mode. `npm test` never loads .env, so tests always run in mock mode.
+Verified 10 Oct 2026: x402.org facilitator `/supported` lists v1 exact/base-sepolia; a dummy-signed payload is rejected by
+facilitator /verify with `invalid_exact_evm_signature` (no funds moved, nothing logged).
