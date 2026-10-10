@@ -8,7 +8,9 @@
     "seed": "tsx src/seed.ts",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "start:mock": "PAYMENT_MODE=mock tsx src/server.ts"
+    "start:mock": "PAYMENT_MODE=mock tsx src/server.ts",
+    "pay:balance": "tsx scripts/payer-balance.ts",
+    "pay:recommend": "tsx scripts/pay-recommend.ts"
   },
   "keywords": [],
   "author": "",
@@ -23,6 +25,7 @@
     "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
     "tsx": "^4.23.15",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "x402-fetch": "^1.2.0"
   }
 }
