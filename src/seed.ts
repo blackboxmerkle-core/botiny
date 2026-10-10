@@ -11,3 +11,11 @@ export async function seed() {
   return items.length;
 }
 if (require.main === module) seed().then(n => { console.log(`seeded ${n} listings`); return pool.end(); });
+/** Test-only: wipe and reseed, refusing unless the connected database name ends in _test. */
+export async function resetTestDb() {
+  await migrate();
+  const db = (await pool.query("SELECT current_database() AS d")).rows[0].d as string;
+  if (!db.endsWith("_test")) throw new Error(`refusing to reset non-test database ${db}`);
+  await pool.query("TRUNCATE api_log, impressions, requests, listings RESTART IDENTITY CASCADE");
+  return seed();
+}

@@ -5,7 +5,7 @@ process.env.DASHBOARD_PASSWORD = "test-pass";
 const AUTH = { authorization: "Basic " + Buffer.from("admin:test-pass").toString("base64") };
 import { createApp } from "../src/app";
 import { pool } from "../src/db";
-import { seed } from "../src/seed";
+import { resetTestDb as seed } from "../src/seed";
 import { canonicalize, sha256 } from "../src/canonical";
 import { embed } from "../src/embed";
 

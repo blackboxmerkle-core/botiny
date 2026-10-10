@@ -5,7 +5,7 @@ process.env.DASHBOARD_PASSWORD = "test-pass";
 const AUTH = { authorization: "Basic " + Buffer.from("admin:test-pass").toString("base64") };
 import { createApp } from "../src/app";
 import { pool } from "../src/db";
-import { seed } from "../src/seed";
+import { resetTestDb as seed } from "../src/seed";
 let base = ""; let server: any;
 before(async () => { await seed(); server = createApp().listen(0); base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`; });
 after(async () => { server.close(); await pool.end(); });
