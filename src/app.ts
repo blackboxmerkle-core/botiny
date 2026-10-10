@@ -5,11 +5,14 @@ import { insertListing, validateListing } from "./listings";
 import { normalizeInput, rank, canonicalRequest, RANKER_VERSION } from "./rank";
 import { EMBEDDING_MODEL } from "./embed";
 import { sha256 } from "./canonical";
+import { apiLogger, dashboardRouter } from "./dashboard";
 import { verifyPayment, settlePayment, requirements, MODE, NETWORK } from "./payment";
 
 export function createApp() {
   const app = express();
   app.use(express.json({ limit: "64kb" }));
+  app.use(apiLogger());
+  app.use("/dashboard", dashboardRouter()); // read-only, NO AUTH: local use only
   app.get("/v1/health", (_q, r) => r.json({ ok: true, payment_mode: MODE, network: NETWORK }));
 
   app.post("/v1/listings", async (req, res) => {
@@ -24,11 +27,12 @@ export function createApp() {
     const header = req.get("X-PAYMENT");
     if (!header) return res.status(402).json({ x402Version: 1, error: "X-PAYMENT header is required", accepts: [requirements(resource)] });
     const pay = await verifyPayment(header, resource);
-    if ("error" in pay) return res.status(402).json({ x402Version: 1, error: pay.error, accepts: [requirements(resource)] });
+    if ("error" in pay) { res.locals.error = pay.error; } if ("error" in pay) return res.status(402).json({ x402Version: 1, error: pay.error, accepts: [requirements(resource)] });
 
     // ONE transaction: pin snapshot, rank, log request + response hash + impressions.
     const client = await pool.connect();
     const request_id = "req_" + randomUUID();
+    res.locals.request_id = request_id;
     let out;
     try {
       await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
@@ -50,6 +54,7 @@ export function createApp() {
       await client.query("COMMIT");
     } catch (e: any) {
       await client.query("ROLLBACK").catch(() => {});
+      res.locals.error = String(e?.message ?? e);
       if (e?.code === "23505") return res.status(409).json({ error: "payment already used" });
       return res.status(500).json({ error: "internal error", detail: String(e?.message ?? e) });
     } finally { client.release(); }

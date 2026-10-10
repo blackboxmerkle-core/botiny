@@ -6,7 +6,7 @@
   "scripts": {
     "start": "tsx --env-file=.env src/server.ts",
     "seed": "tsx src/seed.ts",
-    "test": "tsx --test test/*.test.ts",
+    "test": "DATABASE_URL=postgres://bot:bot@localhost:5432/botrec_test PAYMENT_MODE=mock tsx --test --test-concurrency=1 test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "start:mock": "PAYMENT_MODE=mock tsx src/server.ts",
     "pay:balance": "tsx scripts/payer-balance.ts",
@@ -24,6 +24,7 @@
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
+    "playwright-core": "^1.64.0",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "x402-fetch": "^1.2.0"

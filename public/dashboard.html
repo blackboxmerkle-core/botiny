@@ -1,0 +1,94 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>bot-rec-market · dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#0f1218;--card:#171b23;--line:#262c38;--fg:#e6e9ef;--mut:#8a93a6;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--acc:#58a6ff}
+*{box-sizing:border-box}body{margin:0;font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--fg)}
+header{display:flex;align-items:center;gap:16px;padding:12px 20px;border-bottom:1px solid var(--line)}
+header h1{font-size:16px;margin:0}.pill{padding:2px 8px;border-radius:10px;background:#21262d;color:var(--mut);font-size:11px}
+nav{display:flex;gap:4px;margin-left:auto}nav button{background:none;border:1px solid var(--line);color:var(--fg);padding:5px 12px;border-radius:6px;cursor:pointer}
+nav button.on{background:var(--acc);color:#000;border-color:var(--acc)}
+main{padding:16px 20px;display:grid;gap:16px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}.card h2{font-size:13px;margin:0 0 10px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.kpi{font-size:24px;font-weight:600}.kpi small{font-size:11px;color:var(--mut);display:block;font-weight:400}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--mut);font-weight:500}
+tr.click{cursor:pointer}tr.click:hover{background:#1f2530}code,.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+.s2{color:var(--ok)}.s4{color:var(--warn)}.s5{color:var(--bad)}a{color:var(--acc)}.mut{color:var(--mut)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:1000px){.two{grid-template-columns:1fr}}
+.bar{display:flex;align-items:flex-end;gap:2px;height:110px}.bar div{flex:1;display:flex;flex-direction:column-reverse;min-width:3px}
+.bar span{display:block}.b-ok{background:var(--ok)}.b-402{background:var(--warn)}.b-err{background:var(--bad)}
+.badge{padding:1px 7px;border-radius:9px;font-size:11px}.g{background:#12361f;color:var(--ok)}.y{background:#3a2d0c;color:var(--warn)}.r{background:#3d1214;color:var(--bad)}
+button.act{background:var(--acc);color:#000;border:0;padding:6px 12px;border-radius:6px;cursor:pointer;font-weight:600}
+.hide{display:none}input{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:5px 8px;border-radius:6px;width:260px}
+</style></head><body>
+<header><h1>bot-rec-market</h1><span class="pill" id="mode">…</span><span class="pill">read-only · local · no auth</span>
+<nav><button data-t="usage" class="on">API usage</button><button data-t="tx">Transactions</button><button data-t="req">Requests</button><button data-t="adv">Advertisers</button><button data-t="cat">Catalogue</button></nav></header>
+<main>
+<section id="t-usage">
+ <div class="grid" id="kpis"></div>
+ <div class="card" style="margin-top:16px"><h2>Requests over time (10-min buckets, 24h) <span class="mut" style="text-transform:none">· green 200 · amber 402 · red other errors</span></h2><div class="bar" id="chart"></div></div>
+ <div class="two" style="margin-top:16px">
+  <div class="card"><h2>By endpoint / status</h2><table id="byroute"></table></div>
+  <div class="card"><h2>Recent calls <span class="mut" style="text-transform:none">· auto-refresh 5s</span></h2><table id="recent"></table></div>
+ </div></section>
+<section id="t-tx" class="hide">
+ <div class="grid" id="chainkpi"></div>
+ <div class="card" style="margin-top:16px"><h2>Reconciliation (off-chain settled ↔ on-chain)</h2><div id="recon"></div></div>
+ <div class="two" style="margin-top:16px">
+  <div class="card"><h2>Off-chain payments</h2><table id="pays"></table></div>
+  <div class="card"><h2>On-chain: USDC Transfers → payee (last ~3000 blocks ≈ 100 min)</h2><table id="transfers"></table></div>
+ </div></section>
+<section id="t-req" class="hide"><div class="two">
+ <div class="card"><h2>Paid requests</h2><table id="reqs"></table></div>
+ <div class="card" id="detail"><h2>Request detail</h2><p class="mut">Click a request.</p></div></div></section>
+<section id="t-adv" class="hide"><div class="card"><h2>Advertiser spend (per-impression charges)</h2><table id="advs"></table></div></section>
+<section id="t-cat" class="hide"><div class="card"><h2>Catalogue <input id="filter" placeholder="filter…"></h2><table id="cat"></table></div></section>
+</main>
+<script>
+const $=s=>document.querySelector(s), j=u=>fetch(u).then(r=>r.json());
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const usdc=a=>(Number(a||0)/1e6).toFixed(6), t=s=>s?new Date(s).toLocaleTimeString():"", d=s=>s?new Date(s).toLocaleString():"";
+const sc=s=>"s"+String(s)[0], short=h=>h?esc(h.slice(0,10))+"…":"";
+const tx=h=>h&&/^0x[0-9a-f]{64}$/i.test(h)?`<a target=_blank href="https://sepolia.basescan.org/tx/${h}"><code>${short(h)}</code></a>`:`<code>${esc(h||"—")}</code>`;
+const addr=a=>`<a target=_blank href="https://sepolia.basescan.org/address/${a}"><code>${esc(a)}</code></a>`;
+const st=s=>`<span class="badge ${s==="settled"?"g":s==="verified"?"y":"r"}">${esc(s)}</span>`;
+let tab="usage";
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{tab=b.dataset.t;document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x===b));document.querySelectorAll("main>section").forEach(s=>s.classList.toggle("hide",s.id!=="t-"+tab));load()});
+async function usage(){const u=await j("api/usage");
+ const tot=u.by_route.reduce((a,r)=>a+r.n,0),f=k=>u.by_route.filter(k).reduce((a,r)=>a+r.n,0);
+ $("#kpis").innerHTML=[["Calls (24h)",tot],["200 OK",f(r=>r.status===200)],["402 Payment required",f(r=>r.status===402)],["409 Conflict",f(r=>r.status===409)],["5xx errors",f(r=>r.status>=500)],["Paid recommends",f(r=>r.status===200&&r.route==="/v1/recommend")]].map(([k,v])=>`<div class="card kpi">${v}<small>${k}</small></div>`).join("");
+ const mx=Math.max(1,...u.series.map(s=>s.total));
+ $("#chart").innerHTML=u.series.length?u.series.map(s=>`<div title="${s.bucket}: ${s.total}"><span class="b-ok" style="height:${s.ok/mx*100}px"></span><span class="b-402" style="height:${s.s402/mx*100}px"></span><span class="b-err" style="height:${s.other_err/mx*100}px"></span></div>`).join(""):'<span class="mut">no traffic yet</span>';
+ $("#byroute").innerHTML="<tr><th>Method</th><th>Route</th><th>Status</th><th>Count</th><th>Avg ms</th></tr>"+u.by_route.map(r=>`<tr><td>${r.method}</td><td><code>${esc(r.route)}</code></td><td class="${sc(r.status)}">${r.status}</td><td>${r.n}</td><td>${r.avg_ms}</td></tr>`).join("");
+ $("#recent").innerHTML="<tr><th>Time</th><th>Call</th><th>Status</th><th>ms</th><th>Request / error</th></tr>"+u.recent.map(r=>`<tr><td>${t(r.at)}</td><td>${r.method} <code>${esc(r.route)}</code></td><td class="${sc(r.status)}">${r.status}</td><td>${r.ms}</td><td>${r.request_id?`<a href="#" onclick="openReq('${r.request_id}');return false"><code>${short(r.request_id)}</code></a>`:""} <span class="mut">${esc(r.error||"")}</span></td></tr>`).join("");}
+async function txv(){const [p,c]=await Promise.all([j("api/payments"),j("api/chain")]);
+ $("#chainkpi").innerHTML=[["Payee USDC (on-chain)",c.balances?.payee??"?",addr(c.payee)],["Payer USDC (on-chain)",c.balances?.payer??"?",addr(c.payer)],["Base Sepolia head",c.head??"?","chain 84532"],["Unconfirmed settled",c.unconfirmed,"off-chain settled w/o on-chain proof"]].map(([k,v,s])=>`<div class="card kpi">${v}<small>${k}<br>${s}</small></div>`).join("")+(c.errors.length?`<div class="card s5">RPC: ${esc(c.errors.join("; "))}</div>`:"");
+ $("#recon").innerHTML=c.reconciliation.length?"<table><tr><th>Request</th><th>Settle tx</th><th>Receipt</th><th></th></tr>"+c.reconciliation.map(r=>`<tr><td><code>${short(r.request_id)}</code></td><td>${tx(r.settle_tx)}</td><td>${esc(r.receipt)}</td><td>${r.confirmed?'<span class="badge g">confirmed</span>':'<span class="badge r">NOT CONFIRMED</span>'}</td></tr>`).join("")+"</table>":'<span class="mut">No x402-mode settled payments yet (mock-mode payments are excluded from on-chain reconciliation).</span>';
+ $("#pays").innerHTML="<tr><th>Time</th><th>Payer</th><th>USDC</th><th>Mode</th><th>Status</th><th>Tx</th></tr>"+p.payments.map(r=>`<tr class="click" onclick="openReq('${r.request_id}')"><td>${t(r.received_at)}</td><td><code>${short(r.payer)}</code></td><td>${usdc(r.amount_atomic)}</td><td>${r.payment_mode}</td><td>${st(r.payment_status)}</td><td>${r.payment_mode==="x402"?tx(r.settle_tx):'<span class="mut">mock</span>'}</td></tr>`).join("");
+ $("#transfers").innerHTML=c.transfers.length?"<tr><th>Block</th><th>From</th><th>USDC</th><th>Tx</th></tr>"+c.transfers.map(x=>`<tr><td>${x.block}</td><td><code>${short(x.from)}</code></td><td>${x.value}</td><td>${tx(x.tx)}</td></tr>`).join(""):'<tr><td class="mut">No USDC transfers to payee in window.</td></tr>';}
+async function reqs(){const r=await j("api/requests");
+ $("#reqs").innerHTML="<tr><th>Time</th><th>Query</th><th>#</th><th>Status</th><th>Hash</th></tr>"+r.map(x=>`<tr class="click" onclick="openReq('${x.request_id}')"><td>${t(x.received_at)}</td><td>${esc(x.query)}</td><td>${x.n}</td><td>${st(x.payment_status)}</td><td><code>${short(x.response_hash)}</code></td></tr>`).join("");}
+async function openReq(id){ if(tab!=="req") document.querySelector('nav button[data-t=req]').click();
+ const r=await j("api/requests/"+id);
+ $("#detail").innerHTML=`<h2>Request detail</h2><table>
+ <tr><th>ID</th><td><code>${esc(r.request_id)}</code></td></tr><tr><th>Received</th><td>${d(r.received_at)}</td></tr>
+ <tr><th>Query</th><td><b>${esc(r.request.query)}</b> (k=${r.request.k})</td></tr>
+ <tr><th>Catalogue seq</th><td>${r.catalogue_seq}</td></tr><tr><th>Embedding</th><td><code>${esc(r.embedding_model)}</code></td></tr><tr><th>Ranker</th><td><code>${esc(r.ranker_version)}</code></td></tr>
+ <tr><th>Request hash</th><td><code>${esc(r.request_hash)}</code></td></tr><tr><th>Response hash</th><td><code>${esc(r.response_hash)}</code></td></tr>
+ <tr><th>Payment</th><td>${esc(r.payment_mode)} · ${usdc(r.amount_atomic)} USDC · payer <code>${esc(r.payer)}</code> · ${st(r.payment_status)} ${r.payment_mode==="x402"?tx(r.settle_tx):""}</td></tr>
+ <tr><th>DB txid</th><td><code>${r.db_txid}</code> ${r.impressions.every(i=>i.db_txid===r.db_txid)?'<span class="badge g">impressions in same tx</span>':'<span class="badge r">tx mismatch</span>'}</td></tr></table>
+ <p><button class="act" onclick="replay('${r.request_id}')">Replay &amp; verify</button> <span id="rp"></span></p>
+ <h2>Ranked results &amp; impressions</h2><table><tr><th>#</th><th>Name / address</th><th>Score</th><th>Advertiser</th><th>Charge USDC</th></tr>
+ ${r.response.results.map(x=>{const i=r.impressions.find(i=>i.rank===x.rank)||{};return `<tr><td>${x.rank}</td><td><b>${esc(x.name)}</b> <span class="mut">${esc(x.kind)}</span><br><span class="mut">${esc(x.description)}</span><br><code>${esc(x.address)}</code></td><td>${(x.score_ppm/1e6).toFixed(4)}</td><td><code>${esc(i.provider_id)}</code></td><td>${usdc(i.charge)}</td></tr>`}).join("")}</table>`;}
+async function replay(id){$("#rp").textContent="…";const r=await j("/v1/requests/"+id+"/replay");
+ $("#rp").innerHTML=r.error?`<span class="badge r">${esc(r.error)}</span>`:(r.match?'<span class="badge g">MATCH</span>':'<span class="badge r">MISMATCH</span>')+` <span class="mono mut">replayed ${short(r.replayed_hash)} · logged ${short(r.logged_hash)} · request hash ${r.request_hash_ok?"ok":"BAD"}</span>`;}
+async function adv(){const a=await j("api/advertisers");
+ $("#advs").innerHTML="<tr><th>Provider</th><th>Listings shown</th><th>Impressions</th><th>Spend USDC</th><th>Last impression</th></tr>"+a.map(x=>`<tr><td><code>${esc(x.provider_id)}</code></td><td>${x.listings}</td><td>${x.impressions}</td><td>${usdc(x.spend_micro_usdc)}</td><td>${d(x.last_impression)}</td></tr>`).join("");}
+let catData=[];async function cat(){catData=await j("api/catalogue");drawCat();}
+function drawCat(){const f=$("#filter").value.toLowerCase();
+ $("#cat").innerHTML="<tr><th>Seq</th><th>Name</th><th>Kind</th><th>Provider</th><th>CPI USDC</th><th>Impr.</th><th>Source</th></tr>"+catData.filter(x=>!f||JSON.stringify(x).toLowerCase().includes(f)).map(x=>`<tr title="${esc(x.description)}"><td>${x.seq}</td><td><b>${esc(x.name)}</b>${x.superseded?' <span class="badge y">superseded</span>':""}<br><code class="mut">${esc(x.address)}</code></td><td>${esc(x.kind)}</td><td><code>${esc(x.provider_id)}</code></td><td>${usdc(x.cpi)}</td><td>${x.impressions}</td><td>${x.source_url?`<a target=_blank href="${esc(x.source_url)}">source</a>`:""}</td></tr>`).join("");}
+$("#filter").oninput=drawCat;
+const loaders={usage,tx:txv,req:reqs,adv,cat};
+async function load(){try{loaders[tab]()}catch(e){console.error(e)}}
+j("/v1/health").then(h=>$("#mode").textContent=`${h.payment_mode} · ${h.network}`);
+load();setInterval(()=>{if(tab!=="cat")load()},5000);
+</script></body></html>

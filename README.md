@@ -42,3 +42,12 @@ X402_NETWORK=base-sepolia, FACILITATOR_URL=https://x402.org/facilitator. `npm st
 `npm run start:mock` forces mock mode. `npm test` never loads .env, so tests always run in mock mode.
 Verified 10 Oct 2026: x402.org facilitator `/supported` lists v1 exact/base-sepolia; a dummy-signed payload is rejected by
 facilitator /verify with `invalid_exact_evm_signature` (no funds moved, nothing logged).
+
+## Dashboard (read-only, local, NO AUTH — do not expose beyond localhost without adding auth)
+http://localhost:8402/dashboard/ — tabs: API usage (all /v1 calls incl. 402/409/5xx from `api_log`, 5s auto-refresh),
+Transactions (off-chain payments; on-chain payee/payer USDC balances, USDC Transfer events to payee over the last
+LOG_WINDOW_BLOCKS=3000 blocks in 200-block chunks — the public RPC's getLogs limit — and reconciliation of x402 'settled' rows
+against tx receipts), Requests (detail + "Replay & verify"), Advertisers (impression spend), Catalogue.
+JSON under /dashboard/api/{usage,payments,chain,requests,requests/:id,advertisers,catalogue}. Only public addresses are used
+(PAYER_ADDRESS env, default 0x0b68…5402); PAYER_PRIVATE_KEY is never read by the server.
+Tests use a separate database (botrec_test) and mock payments. Screenshots: `npx tsx scripts/screenshot.ts` -> docs/.

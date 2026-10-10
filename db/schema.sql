@@ -50,3 +50,16 @@ CREATE TABLE IF NOT EXISTS impressions (
   PRIMARY KEY (request_id, rank)
 );
 CREATE INDEX IF NOT EXISTS impressions_provider_idx ON impressions(provider_id, created_at);
+
+-- Lightweight API access log (every /v1 call incl. 402/409/5xx). Not part of the paid-request transaction.
+CREATE TABLE IF NOT EXISTS api_log (
+  id          BIGSERIAL PRIMARY KEY,
+  at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  method      TEXT NOT NULL,
+  route       TEXT NOT NULL,
+  status      INT NOT NULL,
+  ms          INT NOT NULL,
+  request_id  TEXT,
+  error       TEXT
+);
+CREATE INDEX IF NOT EXISTS api_log_at_idx ON api_log(at);
