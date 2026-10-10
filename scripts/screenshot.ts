@@ -12,7 +12,7 @@ import { chromium } from "playwright-core";
   await p.screenshot({ path: "docs/dashboard-catalogue.png", fullPage: true });
   await p.click("nav button[data-t=req]"); await p.waitForTimeout(1000);
   if (await p.$("#reqs tr.click")) {
-    await p.click("#reqs tr.click"); await p.waitForTimeout(800); await p.click("button.act"); await p.waitForTimeout(1000);
+    await p.click("#reqs tr.click"); await p.waitForTimeout(800); await p.click("#detail button.act"); await p.waitForTimeout(1000);
     await p.screenshot({ path: "docs/dashboard-request-replay.png", fullPage: true });
   }
   await b.close();
