@@ -1,0 +1,80 @@
+import { randomBytes } from "node:crypto";
+import type { PoolClient } from "pg";
+import { pool } from "./db";
+import { sha256 } from "./canonical";
+import { currentSettings } from "./settings";
+/** Every writer of listings / balance_ledger / listing_bid_events and every paid recommend takes this lock,
+ *  so "max(seq) committed" read under the lock is a stable snapshot boundary for replay. */
+export const MARKET_LOCK = 424242;
+export async function withMarketLock<T>(fn: (c: PoolClient) => Promise<T>): Promise<T> {
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN ISOLATION LEVEL READ COMMITTED");
+    await c.query("SELECT pg_advisory_xact_lock($1)", [MARKET_LOCK]);
+    const out = await fn(c);
+    await c.query("COMMIT");
+    return out;
+  } catch (e) { await c.query("ROLLBACK").catch(() => {}); throw e; } finally { c.release(); }
+}
+export async function marketSeq(c: { query: PoolClient["query"] }) {
+  return Number((await c.query(`SELECT GREATEST((SELECT COALESCE(MAX(seq),0) FROM balance_ledger),(SELECT COALESCE(MAX(seq),0) FROM listing_bid_events)) AS m`)).rows[0].m);
+}
+export async function balanceOf(c: { query: PoolClient["query"] }, adv: string) {
+  return Number((await c.query("SELECT COALESCE(SUM(delta_atomic),0)::text b FROM balance_ledger WHERE advertiser_id=$1", [adv])).rows[0].b);
+}
+export async function assertNonNegative(c: { query: PoolClient["query"] }, advs: string[]) {
+  for (const a of new Set(advs)) if ((await balanceOf(c, a)) < 0) throw Object.assign(new Error(`balance would go negative for ${a}`), { status: 409 });
+}
+export const ADV_ID_RE = /^[A-Za-z0-9._:-]{1,64}$/;
+export async function createAdvertiser(id: string, name: string) {
+  if (!ADV_ID_RE.test(id)) throw Object.assign(new Error("bad advertiser_id"), { status: 400 });
+  const key = "adv_" + randomBytes(24).toString("hex");
+  await pool.query("INSERT INTO advertisers(advertiser_id,name,api_key_hash) VALUES ($1,$2,$3)", [id, name || id, sha256(key)]);
+  return { advertiser_id: id, api_key: key };
+}
+export async function advertiserByKey(key: string | undefined | null) {
+  if (!key) return null;
+  return (await pool.query("SELECT advertiser_id, name FROM advertisers WHERE api_key_hash=$1", [sha256(key)])).rows[0] ?? null;
+}
+export async function credit(adv: string, amount: number, kind: "admin_credit" | "topup_x402", extra: { settle_tx?: string; payment_ref?: string; payer?: string; note?: string } = {}) {
+  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > 10_000_000) throw Object.assign(new Error("amount_atomic must be 1..10000000"), { status: 400 });
+  return withMarketLock(async c => {
+    const r = await c.query(`INSERT INTO balance_ledger(advertiser_id,delta_atomic,kind,settle_tx,payment_ref,payer,note) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING seq`,
+      [adv, amount, kind, extra.settle_tx ?? null, extra.payment_ref ?? null, extra.payer ?? null, extra.note ?? null]);
+    return { seq: Number(r.rows[0].seq), balance_atomic: await balanceOf(c, adv) };
+  });
+}
+export async function currentBid(c: { query: PoolClient["query"] }, listing: string) {
+  const r = (await c.query("SELECT bid_atomic, paused FROM listing_bid_events WHERE listing_id=$1 ORDER BY seq DESC LIMIT 1", [listing])).rows[0];
+  return { bid_atomic: r ? Number(r.bid_atomic) : 0, paused: r ? r.paused : false };
+}
+export async function setBid(listing: string, patch: { bid_atomic?: number; paused?: boolean }, by: string, ownerCheck?: string) {
+  const { settings } = await currentSettings();
+  if (patch.bid_atomic !== undefined && (!Number.isSafeInteger(patch.bid_atomic) || patch.bid_atomic < 0 || patch.bid_atomic > settings.max_bid_atomic))
+    throw Object.assign(new Error(`bid_atomic must be integer 0..${settings.max_bid_atomic}`), { status: 400 });
+  return withMarketLock(async c => {
+    const l = (await c.query("SELECT provider_id FROM listings WHERE listing_id=$1", [listing])).rows[0];
+    if (!l) throw Object.assign(new Error("listing not found"), { status: 404 });
+    if (ownerCheck && l.provider_id !== ownerCheck) throw Object.assign(new Error("not your listing"), { status: 403 });
+    const cur = await currentBid(c, listing);
+    const next = { bid_atomic: patch.bid_atomic ?? cur.bid_atomic, paused: patch.paused ?? cur.paused };
+    const r = await c.query("INSERT INTO listing_bid_events(listing_id,bid_atomic,paused,set_by) VALUES ($1,$2,$3,$4) RETURNING seq", [listing, next.bid_atomic, next.paused, by]);
+    return { listing_id: listing, ...next, seq: Number(r.rows[0].seq) };
+  });
+}
+export async function advertiserSummary(adv: string) {
+  const q = async (s: string, p: any[]) => (await pool.query(s, p)).rows;
+  const tot = (await q(`SELECT COALESCE(SUM(delta_atomic),0)::text balance,
+      COALESCE(SUM(delta_atomic) FILTER (WHERE kind='topup_x402'),0)::text topups_onchain,
+      COALESCE(SUM(delta_atomic) FILTER (WHERE kind='admin_credit'),0)::text admin_credits,
+      COALESCE(-SUM(delta_atomic) FILTER (WHERE kind='impression_debit'),0)::text spend,
+      COUNT(*) FILTER (WHERE kind='impression_debit')::int sponsored_impressions FROM balance_ledger WHERE advertiser_id=$1`, [adv]))[0];
+  const listings = await q(`SELECT l.listing_id, l.name, l.kind, l.address,
+      COALESCE((SELECT bid_atomic FROM listing_bid_events e WHERE e.listing_id=l.listing_id ORDER BY seq DESC LIMIT 1),0)::int bid_atomic,
+      COALESCE((SELECT paused FROM listing_bid_events e WHERE e.listing_id=l.listing_id ORDER BY seq DESC LIMIT 1),false) paused,
+      (SELECT count(*)::int FROM impressions i WHERE i.listing_id=l.listing_id AND i.sponsored) sponsored_impressions,
+      (SELECT count(*)::int FROM impressions i WHERE i.listing_id=l.listing_id AND NOT i.sponsored) organic_impressions
+    FROM listings l WHERE l.provider_id=$1 AND NOT EXISTS (SELECT 1 FROM listings n WHERE n.supersedes=l.listing_id) ORDER BY l.seq`, [adv]);
+  const ledger = await q(`SELECT seq::int, created_at, kind, delta_atomic::text, request_id, listing_id, settle_tx, note FROM balance_ledger WHERE advertiser_id=$1 ORDER BY seq DESC LIMIT 50`, [adv]);
+  return { advertiser_id: adv, ...tot, listings, ledger };
+}

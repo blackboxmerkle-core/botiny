@@ -78,7 +78,8 @@ test("audit endpoints expose request impressions and provider spend", async () =
   const a = await (await fetch(`${base}/v1/requests/${j.request_id}`)).json();
   assert.equal(a.impressions.length, j.response.results.length);
   const sp = await (await fetch(`${base}/v1/audit/providers/adv:acme`, { headers: AUTH })).json();
-  assert.ok(Number(sp.listings[0].spend_micro_usdc) >= 250);
+  assert.ok(sp.listings[0].impressions >= 1); // acme has no advertiser account -> organic, free
+  assert.equal(Number(sp.listings[0].spend_micro_usdc), 0);
 });
 
 test("auth: listings/audit need basic auth, recommend and health stay public", async () => {

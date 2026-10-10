@@ -16,6 +16,7 @@ export async function resetTestDb() {
   await migrate();
   const db = (await pool.query("SELECT current_database() AS d")).rows[0].d as string;
   if (!db.endsWith("_test")) throw new Error(`refusing to reset non-test database ${db}`);
-  await pool.query("TRUNCATE api_log, impressions, requests, listings RESTART IDENTITY CASCADE");
+  await pool.query("TRUNCATE api_log, balance_ledger, listing_bid_events, advertisers, impressions, requests, listings, settings_versions RESTART IDENTITY CASCADE");
+  const { ensureSettings } = await import("./settings"); await ensureSettings();
   return seed();
 }

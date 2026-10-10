@@ -25,7 +25,7 @@ button.act{background:var(--acc);color:#000;border:0;padding:6px 12px;border-rad
 .filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}select,input[type=date]{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:5px 8px;border-radius:6px;width:auto}
 </style></head><body>
 <header><h1>bot-rec-market</h1><span class="pill" id="mode">…</span><span class="pill">read-only · basic auth · TESTNET</span>
-<nav><button data-t="usage" class="on">API usage</button><button data-t="fin">Financials</button><button data-t="tx">Transactions</button><button data-t="req">Requests</button><button data-t="adv">Advertisers</button><button data-t="cat">Catalogue</button></nav></header>
+<nav><button data-t="usage" class="on">API usage</button><button data-t="bots">Bots · Try a search</button><button data-t="fin">Financials</button><button data-t="tx">Transactions</button><button data-t="req">Requests</button><button data-t="adv">Advertisers</button><button data-t="cat">Catalogue</button><button data-t="admin">Admin</button></nav></header>
 <main>
 <section id="t-usage">
  <div class="filters">Bot <select id="u-bot"><option value="">all bots</option></select></div>
@@ -36,24 +36,50 @@ button.act{background:var(--acc);color:#000;border:0;padding:6px 12px;border-rad
   <div class="card"><h2>By endpoint / status</h2><table id="byroute"></table></div>
   <div class="card"><h2>Recent calls <span class="mut" style="text-transform:none">· auto-refresh 5s</span></h2><table id="recent"></table></div>
  </div></section>
+<section id="t-bots" class="hide">
+ <div class="card testnet">⚠ TESTNET — "Run search" makes a REAL x402 payment on Base Sepolia from the server-side simulator payer wallet (cap 0.01 USDC/call). The key never leaves the server.</div>
+ <div class="two" style="margin-top:16px">
+  <div class="card"><h2>Try a search as a bot</h2>
+   <div class="filters">Bot <select id="tb-bot"><option>research-bot</option><option>dev-bot</option></select> k <input id="tb-k" type="number" min="1" max="20" value="5" style="width:70px"></div>
+   <div class="filters"><input id="tb-q" style="width:100%" placeholder="e.g. MCP server for browser automation"></div>
+   <button class="act" id="tb-go">Run paid search</button> <span id="tb-status" class="mut"></span>
+   <div id="tb-out" style="margin-top:12px"></div></div>
+  <div class="card"><h2>Bot query history <span class="mut" style="text-transform:none">· click a row for details</span></h2>
+   <div class="filters"><select id="bh-bot"><option>research-bot</option><option>dev-bot</option></select></div><table id="bh"></table></div>
+ </div></section>
+<section id="t-admin" class="hide">
+ <div class="card testnet">Admin · TESTNET. All changes are append-only and versioned; each request stores the settings version and market sequence it used.</div>
+ <div class="two" style="margin-top:16px">
+  <div class="card"><h2>Pricing &amp; ranking settings <span id="ad-ver" class="pill"></span></h2><table id="ad-set"></table>
+   <div class="filters" style="margin-top:8px"><input id="ad-note" placeholder="change note" style="width:260px"><button class="act" id="ad-save">Save new version</button> <span id="ad-msg" class="mut"></span></div>
+   <p class="mut" id="ad-formula"></p></div>
+  <div class="card"><h2>Settings history</h2><table id="ad-hist"></table></div>
+ </div>
+ <div class="card" style="margin-top:16px"><h2>Advertisers</h2><table id="ad-advs"></table>
+  <div class="filters" style="margin-top:8px">New advertiser <input id="na-id" placeholder="adv:acme" style="width:160px"><input id="na-name" placeholder="name" style="width:160px"><button class="act" id="na-go">Create</button> <span id="na-msg" class="mono"></span></div></div>
+ <div class="card" style="margin-top:16px"><h2>Listings — bids &amp; pause</h2><table id="ad-lst"></table></div>
+ <div class="card" style="margin-top:16px"><h2>Recent bid / pause events</h2><table id="ad-ev"></table></div>
+</section>
 <section id="t-fin" class="hide">
  <div class="card testnet">⚠ TESTNET ONLY — Base Sepolia (chain 84532), test USDC <code>0x036C…CF7e</code>. No real funds. <span id="finnote"></span></div>
  <h3 class="sh">Wallet balances (live, on-chain)</h3><div class="grid" id="wallets"></div>
  <h3 class="sh">Totals</h3><div class="card"><table id="totals"></table></div>
- <div class="card" style="margin-top:16px"><h2>Revenue over time (hourly, 7d, Europe/London) <span class="mut" style="text-transform:none">· green settled · amber unsettled/failed · blue advertiser accrued</span></h2><div class="bar" id="revchart"></div><div class="mut" id="revaxis"></div></div>
+ <div class="card" style="margin-top:16px"><h2>Revenue over time (hourly, 7d, Europe/London) <span class="mut" style="text-transform:none">· green settled searcher fees · amber unsettled/failed · blue advertiser fees</span></h2><div class="bar" id="revchart"></div><div class="mut" id="revaxis"></div></div>
  <h3 class="sh">Distributions</h3>
  <div class="grid4">
-  <div class="card"><h2>Ad charges by advertiser/provider</h2><div id="d-prov"></div></div>
+  <div class="card"><h2>Advertiser fees by advertiser</h2><div id="d-prov"></div></div>
   <div class="card"><h2>Impressions by service kind</h2><div id="d-kind"></div></div>
   <div class="card"><h2>Query revenue by payer wallet</h2><div id="d-payer"></div></div>
   <div class="card"><h2>Impression share by rank</h2><div id="d-rank"></div></div>
   <div class="card"><h2>Query revenue by bot</h2><div id="d-bot"></div></div>
+  <div class="card"><h2>Sponsored vs organic impressions</h2><div id="d-so"></div></div>
+  <div class="card"><h2>Revenue split</h2><div id="d-split"></div></div>
  </div>
  <div class="card" style="margin-top:16px"><h2>What is real vs accrued</h2><ul id="notes" class="mut"></ul></div>
  <div class="card" style="margin-top:16px"><h2>Ledger (all money movements)</h2>
   <div class="filters">From <input type="date" id="f-from"> To <input type="date" id="f-to">
-   <select id="f-type"><option value="">all types</option><option value="bot_query_payment">bot query payment (in)</option><option value="advertiser_impression_charge">advertiser impression charge (accrued)</option></select>
-   <select id="f-status"><option value="">all statuses</option><option>settled</option><option>verified</option><option>settle_failed</option><option>accrued</option></select>
+   <select id="f-type"><option value="">all types</option><option value="bot_query_payment">bot query payment (in)</option><option value="advertiser_impression_charge">advertiser impression charge (consumed)</option><option value="advertiser_topup">advertiser top-up (x402)</option><option value="advertiser_admin_credit">admin credit</option></select>
+   <select id="f-status"><option value="">all statuses</option><option>settled</option><option>verified</option><option>settle_failed</option><option>consumed</option><option>credited</option></select>
    <select id="f-bot"><option value="">all bots</option></select>
    <select id="f-mode"><option value="">all modes</option><option>x402</option><option>mock</option><option>offchain</option></select>
    <button class="act" id="f-apply">Apply</button> <a id="csv" class="act" href="api/financials.csv" style="text-decoration:none;padding:6px 12px;border-radius:6px">⬇ CSV</a></div>
@@ -103,13 +129,13 @@ async function openReq(id){ if(tab!=="req") document.querySelector('nav button[d
  $("#detail").innerHTML=`<h2>Request detail</h2><table>
  <tr><th>ID</th><td><code>${esc(r.request_id)}</code></td></tr><tr><th>Bot</th><td><code>${esc(r.bot_id||"—")}</code></td></tr><tr><th>Received</th><td>${d(r.received_at)}</td></tr>
  <tr><th>Query</th><td><b>${esc(r.request.query)}</b> (k=${r.request.k})</td></tr>
- <tr><th>Catalogue seq</th><td>${r.catalogue_seq}</td></tr><tr><th>Embedding</th><td><code>${esc(r.embedding_model)}</code></td></tr><tr><th>Ranker</th><td><code>${esc(r.ranker_version)}</code></td></tr>
+ <tr><th>Pinned state</th><td class="mono">catalogue ${r.catalogue_seq} · market ${r.market_seq??"–"} · settings v${r.settings_version??"–"}</td></tr><tr><th>Embedding</th><td><code>${esc(r.embedding_model)}</code></td></tr><tr><th>Ranker</th><td><code>${esc(r.ranker_version)}</code></td></tr>
  <tr><th>Request hash</th><td><code>${esc(r.request_hash)}</code></td></tr><tr><th>Response hash</th><td><code>${esc(r.response_hash)}</code></td></tr>
  <tr><th>Payment</th><td>${esc(r.payment_mode)} · ${usdc(r.amount_atomic)} USDC · payer <code>${esc(r.payer)}</code> · ${st(r.payment_status)} ${r.payment_mode==="x402"?tx(r.settle_tx):""}</td></tr>
  <tr><th>DB txid</th><td><code>${r.db_txid}</code> ${r.impressions.every(i=>i.db_txid===r.db_txid)?'<span class="badge g">impressions in same tx</span>':'<span class="badge r">tx mismatch</span>'}</td></tr></table>
  <p><button class="act" onclick="replay('${r.request_id}')">Replay &amp; verify</button> <span id="rp"></span></p>
- <h2>Ranked results &amp; impressions</h2><table><tr><th>#</th><th>Name / address</th><th>Score</th><th>Advertiser</th><th>Charge USDC</th></tr>
- ${r.response.results.map(x=>{const i=r.impressions.find(i=>i.rank===x.rank)||{};return `<tr><td>${x.rank}</td><td><b>${esc(x.name)}</b> <span class="mut">${esc(x.kind)}</span><br><span class="mut">${esc(x.description)}</span><br><code>${esc(x.address)}</code></td><td>${(x.score_ppm/1e6).toFixed(4)}</td><td><code>${esc(i.provider_id)}</code></td><td>${usdc(i.charge)}</td></tr>`}).join("")}</table>`;}
+ <h2>Ranked results &amp; impressions</h2><table><tr><th>#</th><th>Name / address</th><th>Score</th><th>Advertiser</th><th>Charge USDC (fixed+bid)</th></tr>
+ ${r.response.results.map(x=>{const i=r.impressions.find(i=>i.rank===x.rank)||{};return `<tr><td>${x.rank}</td><td>${x.sponsored?'<span class="badge y">Sponsored</span> ':''}<b>${esc(x.name)}</b> <span class="mut">${esc(x.kind)}</span><br><span class="mut">${esc(x.description)}</span><br><code>${esc(x.address)}</code></td><td>${(x.score_ppm/1e6).toFixed(4)}</td><td><code>${esc(i.provider_id)}</code></td><td>${usdc(i.charge)}${i.sponsored?` <span class="mut">(${i.fixed}+${i.bid})</span>`:''}</td></tr>`}).join("")}</table>`;}
 async function replay(id){$("#rp").textContent="…";const r=await j("/v1/requests/"+id+"/replay");
  $("#rp").innerHTML=r.error?`<span class="badge r">${esc(r.error)}</span>`:(r.match?'<span class="badge g">MATCH</span>':'<span class="badge r">MISMATCH</span>')+` <span class="mono mut">replayed ${short(r.replayed_hash)} · logged ${short(r.logged_hash)} · request hash ${r.request_hash_ok?"ok":"BAD"}</span>`;}
 async function adv(){const a=await j("api/advertisers");
@@ -126,22 +152,54 @@ function finQS(){const p=new URLSearchParams();[["bot","f-bot"],["from","f-from"
 async function fin(){const f=await j("api/financials?"+finQS());$("#csv").href="api/financials.csv?"+finQS();
  const b=f.wallets.balances||{};
  $("#wallets").innerHTML=[["Payee (receives query payments)",f.wallets.payee,b.payee,b.payee_eth],["Payer (test bot wallet)",f.wallets.payer,b.payer,b.payer_eth]].map(([k,a,u,e])=>`<div class="card kpi">${u??"?"} <span style="font-size:13px">USDC</span><small>${e??"?"} ETH · ${k}<br>${addr(a)}</small></div>`).join("")+(f.wallets.errors.length?`<div class="card s5">RPC: ${esc(f.wallets.errors.join("; "))}</div>`:"");
- const T=f.totals,rows=[["Paid bot queries","paid_queries",x=>x],["Query revenue — gross","query_gross",U6],["  · settled","query_settled",U6],["  · settled on-chain (x402)","query_settled_onchain",U6],["  · pending (verified, not settled)","query_pending",U6],["  · settle failed","query_failed",U6],["Avg revenue per query","avg_per_query",U6],["Advertiser impression charges (ACCRUED, unpaid)","ad_accrued",U6],["Charged impressions","charged_impressions",x=>x]];
- $("#totals").innerHTML="<tr><th></th><th>Today</th><th>7 days</th><th>All time</th></tr>"+rows.map(([l,k,fm])=>`<tr><td>${l}</td><td>${fm(T.today[k])}</td><td>${fm(T.d7[k])}</td><td><b>${fm(T.all[k])}</b></td></tr>`).join("")+'<tr><td colspan=4 class="mut">USDC amounts (testnet). Gross includes mock-mode payments; see "settled on-chain" for real testnet transfers.</td></tr>';
+ const T=f.totals,rows=[["Paid bot queries","paid_queries",x=>x],["Query revenue — gross","query_gross",U6],["  · settled","query_settled",U6],["  · settled on-chain (x402)","query_settled_onchain",U6],["  · pending (verified, not settled)","query_pending",U6],["  · settle failed","query_failed",U6],["Avg revenue per query","avg_per_query",U6],["Advertiser fees consumed (sponsored impressions, from prepaid)","ad_fees",U6],["Sponsored impressions charged","charged_impressions",x=>x],["Total revenue (settled searcher fees + advertiser fees)","total_revenue",U6],["Advertiser top-ups received on-chain (x402)","topups_onchain",U6],["Advertiser top-ups (mock)","topups_mock",U6],["Admin manual credits (no funds moved)","admin_credits",U6]];
+ $("#totals").innerHTML="<tr><th></th><th>Today</th><th>7 days</th><th>All time</th></tr>"+rows.map(([l,k,fm])=>`<tr><td>${l}</td><td>${fm(T.today[k])}</td><td>${fm(T.d7[k])}</td><td><b>${fm(T.all[k])}</b></td></tr>`).join("")+`<tr><td><b>Outstanding prepaid liability</b> (owed to advertisers)</td><td colspan=3><b>${U6(f.liability.outstanding_prepaid_atomic)}</b> <span class="mut">${f.liability.per_advertiser.map(a=>esc(a.key)+" "+U6(a.atomic)).join(" · ")}</span></td></tr><tr><td colspan=4 class="mut">USDC amounts (testnet). Revenue split: searcher fees = settled bot query payments; advertiser fees = prepaid balance consumed by sponsored impressions.</td></tr>`;
  const S=f.series,mx=Math.max(1,...S.map(s=>+s.settled+ +s.unsettled+ +s.ad_accrued));
  $("#revchart").innerHTML=S.length?S.map(s=>`<div title="${s.bucket}: settled ${U6(s.settled)} · unsettled ${U6(s.unsettled)} · ad ${U6(s.ad_accrued)}"><span class="b-ok" style="height:${s.settled/mx*100}px"></span><span class="b-402" style="height:${s.unsettled/mx*100}px"></span><span class="b-ad" style="height:${s.ad_accrued/mx*100}px"></span></div>`).join(""):'<span class="mut">no revenue yet</span>';
  $("#revaxis").textContent=S.length?`${S[0].bucket} → ${S[S.length-1].bucket} · peak ${U6(mx)} USDC/h`:"";
- const D=f.distributions;fillBots("#f-bot",D.by_bot.map(b=>b.key));
+ const D=f.distributions;$("#d-so").innerHTML=hbars(D.sponsored_vs_organic,r=>r.impressions,r=>`${r.impressions} imp · ${U6(r.atomic)}`);
+ $("#d-split").innerHTML=hbars([{key:"searcher fees",a:+T.all.query_settled},{key:"advertiser fees",a:+T.all.ad_fees}],r=>r.a,r=>U6(r.a));fillBots("#f-bot",D.by_bot.map(b=>b.key));
  $("#d-bot").innerHTML=hbars(D.by_bot,r=>+r.atomic,r=>`${U6(r.atomic)} · ${r.queries} q · ${r.settled} ✓${r.not_settled?" · "+r.not_settled+" ✗":""}`);
  $("#d-prov").innerHTML=hbars(D.by_provider,r=>+r.atomic||0,r=>`${U6(r.atomic)} · ${r.impressions} imp`);
  $("#d-kind").innerHTML=hbars(D.by_kind,r=>r.impressions,r=>`${r.impressions} imp · ${U6(r.atomic)}`);
  $("#d-payer").innerHTML=hbars(D.by_payer.map(r=>({...r,key:r.key+" ("+r.mode+")"})),r=>+r.atomic,r=>`${U6(r.atomic)} · ${r.queries} q`);
- const ti=D.by_rank.reduce((a,r)=>a+r.impressions,0)||1;$("#d-rank").innerHTML=hbars(D.by_rank.map(r=>({...r,key:"rank "+r.key})),r=>r.impressions,r=>`${(r.impressions/ti*100).toFixed(1)}%`);
+ const ti=D.by_rank.reduce((a,r)=>a+r.impressions,0)||1;$("#d-rank").innerHTML=hbars(D.by_rank.map(r=>({...r,key:"rank "+r.key})),r=>r.impressions,r=>`${(r.impressions/ti*100).toFixed(1)}% · ${r.sponsored} sp`);
  $("#notes").innerHTML=Object.entries(f.notes).map(([k,v])=>`<li><b>${k.replace("_"," ")}:</b> ${esc(v)}</li>`).join("");
- $("#ledger").innerHTML="<tr><th>Time</th><th>Bot</th><th>Type</th><th>Status</th><th>Mode</th><th>Counterparty</th><th>USDC</th><th>Request</th><th>On-chain</th></tr>"+f.ledger.map(x=>`<tr><td>${d(x.at)}</td><td><code>${esc(x.bot_id||"—")}</code></td><td>${x.type==="bot_query_payment"?"query payment in":"ad charge (accrued)"}</td><td>${x.status==="accrued"?'<span class="badge y">accrued</span>':st(x.status)}</td><td>${esc(x.mode)}</td><td><code>${esc(x.counterparty)}</code></td><td>${U6(x.amount_atomic)}</td><td><a href="#" onclick="openReq('${x.request_id}');return false"><code>${short(x.request_id)}</code></a></td><td>${x.settle_tx?tx(x.settle_tx)+" ":""}<span class="mut">${esc(x.onchain)}</span></td></tr>`).join("")+(f.ledger.length?"":'<tr><td class="mut" colspan=8>No ledger entries for these filters.</td></tr>');}
+ $("#ledger").innerHTML="<tr><th>Time</th><th>Bot</th><th>Type</th><th>Status</th><th>Mode</th><th>Counterparty</th><th>USDC</th><th>Request</th><th>On-chain</th></tr>"+f.ledger.map(x=>`<tr><td>${d(x.at)}</td><td><code>${esc(x.bot_id||"—")}</code></td><td>${({bot_query_payment:"query payment in",advertiser_impression_charge:"ad charge (prepaid debit)",advertiser_topup:"advertiser top-up in",advertiser_admin_credit:"admin credit"})[x.type]}</td><td>${x.status==="consumed"||x.status==="credited"?`<span class="badge y">${x.status}</span>`:st(x.status)}</td><td>${esc(x.mode)}</td><td><code>${esc(x.counterparty)}</code></td><td>${U6(x.amount_atomic)}</td><td><a href="#" onclick="openReq('${x.request_id}');return false"><code>${short(x.request_id)}</code></a></td><td>${x.settle_tx?tx(x.settle_tx)+" ":""}<span class="mut">${esc(x.onchain)}</span></td></tr>`).join("")+(f.ledger.length?"":'<tr><td class="mut" colspan=8>No ledger entries for these filters.</td></tr>');}
 $("#f-apply").onclick=()=>fin();
-const loaders={usage,fin,tx:txv,req:reqs,adv,cat};
+
+const post=(u,b)=>fetch(u,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(b)}).then(async r=>({status:r.status,...(await r.json())}));
+function resultsTable(res){return `<table><tr><th>#</th><th>Name / address</th><th>Kind</th><th>Score</th><th></th></tr>${res.map(x=>`<tr${x.sponsored?' style="background:#2a230f"':''}><td>${x.rank}</td><td><b>${esc(x.name)}</b><br><span class="mut">${esc(x.description)}</span><br><code>${esc(x.address)}</code></td><td>${esc(x.kind)}</td><td>${(x.score_ppm/1e6).toFixed(4)}${x.sponsored?`<br><span class="mut">promo ${(x.promo_score_ppm/1e6).toFixed(4)}</span>`:""}</td><td>${x.sponsored?`<span class="badge y">Sponsored</span><br><span class="mut">${esc(x.advertiser)} · bid ${U6(x.bid_atomic)}</span>`:'<span class="badge g">organic</span>'}</td></tr>`).join("")}</table>`;}
+async function bots(){const b=$("#bh-bot").value,h=await j("api/bots/"+b+"/history");
+ $("#bh").innerHTML="<tr><th>Time</th><th>Query</th><th>Top results</th><th>Status</th><th>Tx</th></tr>"+h.map(x=>`<tr class="click" onclick="openReq('${x.request_id}')"><td>${t(x.received_at)}</td><td>${esc(x.query)}</td><td>${(x.results||[]).slice(0,3).map(r=>(r.sponsored?'<span class="badge y">S</span> ':'')+esc(r.name)).join("<br>")}</td><td>${st(x.payment_status)}</td><td>${tx(x.settle_tx)}</td></tr>`).join("");}
+$("#bh-bot").onchange=bots;
+$("#tb-go").onclick=async()=>{const q=$("#tb-q").value.trim();if(!q)return;$("#tb-go").disabled=true;$("#tb-status").textContent="paying on Base Sepolia…";
+ const r=await post("api/try",{bot_id:$("#tb-bot").value,query:q,k:Number($("#tb-k").value)});$("#tb-go").disabled=false;
+ if(r.error||!r.response){$("#tb-status").innerHTML=`<span class="s5">${esc(r.error||("HTTP "+r.status))}</span>`;return;}
+ $("#tb-status").textContent="done";const p=r.payment||{};
+ $("#tb-out").innerHTML=`<table><tr><th>Request</th><td><a href="#" onclick="openReq('${r.request_id}');return false"><code>${esc(r.request_id)}</code></a></td></tr>
+ <tr><th>Response hash</th><td><code>${esc(r.response_hash)}</code></td></tr>
+ <tr><th>Payment</th><td>${U6(p.amount_atomic)} USDC · ${esc(p.payment_mode)} · ${st(p.payment_status)} ${tx(p.settle_tx)}</td></tr>
+ <tr><th>Pinned</th><td class="mono">catalogue ${r.response.catalogue_seq} · market ${r.response.market_seq} · settings v${r.response.settings_version}</td></tr></table>
+ <p><button class="act" onclick="replayTo('${r.request_id}','#tb-rp')">Replay &amp; verify</button> <span id="tb-rp"></span></p>${resultsTable(r.response.results)}`;
+ $("#bh-bot").value=$("#tb-bot").value;bots();};
+async function replayTo(id,sel){$(sel).textContent="…";const r=await j("/v1/requests/"+id+"/replay");
+ $(sel).innerHTML=r.error?`<span class="badge r">${esc(r.error)}</span>`:(r.match?'<span class="badge g">MATCH</span>':'<span class="badge r">MISMATCH</span>')+` <span class="mono mut">${short(r.replayed_hash)} · settings v${r.settings_version??"–"} · market ${r.market_seq??"–"}</span>`;}
+const SETK=[["query_price_atomic","Query price (bot pays per search)","atomic USDC"],["fixed_cpi_atomic","Fixed price per promoted impression","atomic USDC"],["relevance_threshold_ppm","Relevance threshold to qualify","ppm (score×1e6)"],["promoted_slots","Promoted (sponsored) slots","count"],["bid_weight_ppm_per_atomic","Bid weight in promo score","ppm per atomic bid"],["max_bid_atomic","Max advertiser bid","atomic USDC"]];
+async function admin(){const s=await j("api/admin/state"),S=s.settings.settings;
+ $("#ad-ver").textContent="v"+s.settings.version;
+ $("#ad-set").innerHTML=SETK.map(([k,l,u])=>`<tr><td>${l}<br><span class="mut">${u}</span></td><td><input id="set-${k}" type="number" value="${S[k]}" style="width:140px"></td><td class="mut">${k.endsWith("atomic")?U6(S[k])+" USDC":""}</td></tr>`).join("");
+ $("#ad-formula").innerHTML=`Qualify: score ≥ ${S.relevance_threshold_ppm/1e6}. Promo score = relevance_ppm + ${S.bid_weight_ppm_per_atomic} × bid_atomic. Top ${S.promoted_slots} funded bidders (balance ≥ fixed ${U6(S.fixed_cpi_atomic)} + bid) take the first slots, labelled Sponsored and debited; everything else is organic by relevance and free.`;
+ $("#ad-hist").innerHTML="<tr><th>v</th><th>When</th><th>Note</th><th>Settings</th></tr>"+s.history.map(h=>`<tr><td>${h.version}</td><td>${d(h.created_at)}</td><td>${esc(h.note||"")}</td><td class="mono" style="font-size:11px">${esc(Object.entries(h.settings).map(([k,v])=>k.replace(/_atomic|_ppm.*$/,"")+"="+v).join(" "))}</td></tr>`).join("");
+ $("#ad-advs").innerHTML="<tr><th>Advertiser</th><th>Balance</th><th>On-chain top-ups</th><th>Admin credits</th><th>Spend</th><th>Sponsored imp.</th><th>Manual credit</th></tr>"+s.advertisers.map(a=>`<tr><td><code>${esc(a.advertiser_id)}</code><br><span class="mut">${esc(a.name)}</span></td><td><b>${U6(a.balance)}</b></td><td>${U6(a.topups_onchain)}</td><td>${U6(a.admin_credits)}</td><td>${U6(a.spend)}</td><td>${a.sponsored_impressions}</td><td><input id="cr-${esc(a.advertiser_id)}" type="number" placeholder="atomic" style="width:100px"> <button class="act" onclick="doCredit('${esc(a.advertiser_id)}')">Credit</button></td></tr>`).join("")||'<tr><td class="mut">none</td></tr>';
+ $("#ad-lst").innerHTML="<tr><th>Listing</th><th>Provider</th><th>Account</th><th>Bid (atomic)</th><th>Paused</th><th></th></tr>"+s.listings.map(l=>`<tr><td><b>${esc(l.name)}</b><br><code class="mut">${esc(l.listing_id)}</code></td><td><code>${esc(l.provider_id)}</code></td><td>${l.has_account?'<span class="badge g">advertiser</span>':'<span class="mut">organic only</span>'}</td><td><input id="bid-${l.listing_id}" type="number" value="${l.bid_atomic}" style="width:90px"></td><td><input type="checkbox" id="pz-${l.listing_id}" ${l.paused?"checked":""}></td><td><button class="act" onclick="saveListing('${l.listing_id}')">Save</button></td></tr>`).join("");
+ $("#ad-ev").innerHTML="<tr><th>seq</th><th>When</th><th>Listing</th><th>Bid</th><th>Paused</th><th>By</th></tr>"+s.bid_events.map(e=>`<tr><td>${e.seq}</td><td>${d(e.created_at)}</td><td><code>${esc(e.listing_id)}</code></td><td>${e.bid_atomic}</td><td>${e.paused}</td><td>${esc(e.set_by)}</td></tr>`).join("");}
+$("#ad-save").onclick=async()=>{const s={};SETK.forEach(([k])=>s[k]=Number($("#set-"+k).value));const r=await post("api/admin/settings",{settings:s,note:$("#ad-note").value||null});$("#ad-msg").textContent=r.error||("saved v"+r.version);admin();};
+$("#na-go").onclick=async()=>{const r=await post("api/admin/advertisers",{advertiser_id:$("#na-id").value,name:$("#na-name").value});$("#na-msg").textContent=r.error||("API key (shown once): "+r.api_key);admin();};
+async function doCredit(a){const v=Number(document.getElementById("cr-"+a).value);const r=await post("api/admin/advertisers/"+encodeURIComponent(a)+"/credit",{amount_atomic:v});if(r.error)alert(r.error);admin();}
+async function saveListing(l){const r=await post("api/admin/listings/"+l,{bid_atomic:Number(document.getElementById("bid-"+l).value),paused:document.getElementById("pz-"+l).checked});if(r.error)alert(r.error);admin();}
+const loaders={usage,bots,fin,tx:txv,req:reqs,adv,cat,admin};
 async function load(){try{loaders[tab]()}catch(e){console.error(e)}}
 j("/v1/health").then(h=>$("#mode").textContent=`${h.payment_mode} · ${h.network}`);
-load();setInterval(()=>{if(tab!=="cat"&&tab!=="fin")load()},5000);
+load();setInterval(()=>{if(!["cat","fin","admin","bots"].includes(tab))load()},5000);
 </script></body></html>

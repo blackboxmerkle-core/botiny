@@ -73,3 +73,31 @@ UNION advertiser impression charges with charge > 0 (ACCRUED ONLY — advertiser
 - `npm run sim:stop` — graceful SIGTERM via logs/sim.pid. Logs: logs/sim-research-bot.log, logs/sim-dev-bot.log (JSON lines), logs/sim-main.log.
 - `npm run supervise` — scripts/supervise.sh keeps server + ngrok alive (30s checks), rewrites PUBLIC_BASE_URL and restarts the server if the ngrok URL changes. Stop: `kill $(cat logs/supervise.pid)`.
 - Dashboard: per-bot table + bot filter on API usage; bot filter, "Query revenue by bot" and bot column on Financials; bot shown in Requests.
+
+## Advertiser marketplace (ranker `promo-v2`)
+**Money flow (Base Sepolia TESTNET only).** Bots pay `query_price_atomic` per search (searcher fee). Advertisers prepay test USDC into an
+append-only `balance_ledger` via x402 (`POST /v1/advertisers/me/topup?amount_atomic=1000..100000`, credited only after on-chain settlement),
+or receive admin manual credits (testing only, no funds moved). Sponsored impressions debit `fixed_cpi_atomic + bid` from the balance
+in the SAME DB transaction as the request, response hash and impressions; the transaction asserts no balance went negative.
+
+**Ranking formula (deterministic, admin-configurable, versioned):**
+1. Qualify: `score_ppm >= relevance_threshold_ppm` (cosine × 1e6), and listing not paused. Nothing below threshold is ever shown.
+2. Promotion candidates: qualified listings whose provider has an advertiser account and a bid > 0;
+   `promo_score = score_ppm + bid_weight_ppm_per_atomic × min(bid, max_bid_atomic)`; sort by promo_score desc, listing_id asc.
+3. Walk candidates, granting up to `min(promoted_slots, k)` slots to those whose remaining balance (as of the pinned market_seq,
+   minus earlier grants in this response) ≥ `fixed_cpi_atomic + bid`. Granted entries take the FIRST slots, carry
+   `sponsored:true, label:"Sponsored", advertiser, bid_atomic, promo_score_ppm`, and are charged.
+4. All other qualified listings are organic: by score desc, listing_id asc, **free** — including unfunded advertisers, which
+   therefore rank lower than when promoted (they lose the top slots and the bid boost).
+Defaults (settings v1): query price 1000 (0.001 USDC), fixed CPI 100, threshold 150000, 2 slots, bid weight 200 ppm/atomic, max bid 5000.
+
+**Replay determinism.** Each request pins `catalogue_seq`, `market_seq` (shared sequence over balance_ledger + listing_bid_events),
+`settings_version`, embedding model and ranker version. All writers and paid requests serialize on one advisory lock, so the
+committed state at `market_seq` is exact; replay recomputes balances/bids as of that point. v1 requests still replay with ranker v1.
+
+**APIs.** Admin (basic auth, dashboard Admin tab): `/dashboard/api/admin/{state,settings,advertisers,advertisers/:id/credit,listings/:lid}`.
+Advertiser (Bearer API key, shown once at creation): `GET /v1/advertisers/me`, `PUT /v1/advertisers/me/listings/:lid/bid`, `POST /v1/advertisers/me/topup`.
+Dashboard "Bots · Try a search" (`POST /dashboard/api/try`) makes a real x402 call server-side as research-bot/dev-bot (payer key stays server-side, ≤0.01 USDC, testnet).
+
+**Simulated advertisers.** `adv:sim-scout` and `adv:sim-forge` (in sim-bots.ts) top up 0.005 USDC at a time from the payer wallet when
+balance < 0.002, at most every 20 min, lifetime cap 0.05 USDC each; they random-walk bids (200–1200 atomic). Keys in logs/sim-advertisers.json (gitignored).

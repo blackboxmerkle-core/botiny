@@ -10,9 +10,17 @@ const LEDGER = `
          NULL::int AS rank, NULL::text AS kind, r.bot_id
     FROM requests r
   UNION ALL
-  SELECT i.created_at, 'advertiser_impression_charge', 'accrued', 'offchain', i.provider_id, i.charge_micro_usdc, i.request_id, NULL,
-         i.listing_id, i.rank, l.kind, rq.bot_id
-    FROM impressions i JOIN listings l USING (listing_id) JOIN requests rq USING (request_id) WHERE i.charge_micro_usdc > 0`;
+  SELECT b.created_at, CASE b.kind WHEN 'topup_x402' THEN 'advertiser_topup' ELSE 'advertiser_admin_credit' END,
+         CASE b.kind WHEN 'topup_x402' THEN 'settled' ELSE 'credited' END,
+         CASE b.kind WHEN 'topup_x402' THEN COALESCE(NULLIF(b.note,''),'x402') ELSE 'offchain' END,
+         b.advertiser_id, b.delta_atomic, NULL, b.settle_tx, NULL, NULL, NULL, NULL
+    FROM balance_ledger b WHERE b.kind IN ('topup_x402','admin_credit')
+  UNION ALL
+  SELECT b.created_at, 'advertiser_impression_charge', 'consumed', 'offchain', b.advertiser_id, -b.delta_atomic, b.request_id, NULL,
+         b.listing_id, i.rank, l.kind, rq.bot_id
+    FROM balance_ledger b JOIN listings l USING (listing_id) JOIN requests rq USING (request_id)
+    LEFT JOIN impressions i ON i.request_id=b.request_id AND i.listing_id=b.listing_id
+   WHERE b.kind='impression_debit'`;
 
 function filters(qs: any) {
   const w: string[] = [], p: any[] = [];
@@ -32,12 +40,14 @@ async function ledger(qs: any, limit = 1000) {
 export function financialsRouter() {
   const r = express.Router();
   r.get("/api/financials", async (req, res) => {
-    const settled = await q(`SELECT settle_tx FROM requests WHERE payment_mode='x402' AND payment_status='settled' AND settle_tx IS NOT NULL`);
+    const settled = await q(`SELECT settle_tx FROM requests WHERE payment_mode='x402' AND payment_status='settled' AND settle_tx IS NOT NULL
+      UNION SELECT settle_tx FROM balance_ledger WHERE kind='topup_x402' AND note='x402' AND settle_tx IS NOT NULL`);
     const chain = await chainView(settled.map(s => s.settle_tx));
     const rows = await ledger(req.query);
     for (const x of rows) {
       x.amount_atomic = String(x.amount_atomic);
-      x.onchain = x.type !== "bot_query_payment" ? "n/a (accrued only)" : x.mode === "mock" ? "n/a (mock)" : x.settle_tx ? (chain.receipts[x.settle_tx] ?? "unknown") : "none";
+      x.onchain = x.type === "advertiser_impression_charge" ? "n/a (debit of prepaid balance)" : x.type === "advertiser_admin_credit" ? "n/a (manual credit, no funds moved)"
+        : x.mode === "mock" ? "n/a (mock)" : x.settle_tx ? (chain.receipts[x.settle_tx] ?? "unknown") : "none";
     }
     const bot = typeof req.query.bot === "string" && req.query.bot ? req.query.bot : null;
     const bc = bot === "(none)" ? " AND bot_id IS NULL" : bot ? ` AND bot_id = '${bot.replace(/[^A-Za-z0-9._:-]/g, "")}'` : "";
@@ -49,35 +59,46 @@ export function financialsRouter() {
         coalesce(sum(amount_atomic) FILTER (WHERE type='bot_query_payment' AND status='verified'),0)::text AS query_pending,
         coalesce(sum(amount_atomic) FILTER (WHERE type='bot_query_payment' AND status='settle_failed'),0)::text AS query_failed,
         coalesce(sum(amount_atomic) FILTER (WHERE type='bot_query_payment' AND mode='x402' AND status='settled'),0)::text AS query_settled_onchain,
-        coalesce(sum(amount_atomic) FILTER (WHERE type='advertiser_impression_charge'),0)::text AS ad_accrued,
-        count(*) FILTER (WHERE type='advertiser_impression_charge')::int AS charged_impressions
+        coalesce(sum(amount_atomic) FILTER (WHERE type='advertiser_impression_charge'),0)::text AS ad_fees,
+        count(*) FILTER (WHERE type='advertiser_impression_charge')::int AS charged_impressions,
+        coalesce(sum(amount_atomic) FILTER (WHERE type='advertiser_topup' AND mode='x402'),0)::text AS topups_onchain,
+        coalesce(sum(amount_atomic) FILTER (WHERE type='advertiser_topup' AND mode<>'x402'),0)::text AS topups_mock,
+        coalesce(sum(amount_atomic) FILTER (WHERE type='advertiser_admin_credit'),0)::text AS admin_credits
       FROM (${LEDGER}) x WHERE ${cond}${bc}`).then(r => {
-        const t = r[0]; t.avg_per_query = t.paid_queries ? String(Math.round(Number(t.query_gross) / t.paid_queries)) : "0"; return t; });
+        const t = r[0]; t.total_revenue = String(BigInt(t.query_settled) + BigInt(t.ad_fees)); t.avg_per_query = t.paid_queries ? String(Math.round(Number(t.query_gross) / t.paid_queries)) : "0"; return t; });
     const totals = {
       today: await win(`(at AT TIME ZONE 'Europe/London')::date = (now() AT TIME ZONE 'Europe/London')::date`),
       d7: await win(`at > now() - interval '7 days'`), all: await win("true"),
     };
+    const liab = (await q(`SELECT COALESCE(SUM(delta_atomic),0)::text total,
+        COALESCE(SUM(delta_atomic) FILTER (WHERE kind='topup_x402' AND note='x402'),0)::text funded_onchain FROM balance_ledger`))[0];
+    const liability = { outstanding_prepaid_atomic: liab.total, ever_topped_up_onchain_atomic: liab.funded_onchain,
+      per_advertiser: await q(`SELECT advertiser_id AS key, SUM(delta_atomic)::text AS atomic FROM balance_ledger GROUP BY 1 ORDER BY SUM(delta_atomic) DESC`) };
     const series = await q(`SELECT to_char(date_trunc('hour', at AT TIME ZONE 'Europe/London'),'YYYY-MM-DD HH24:00') AS bucket,
         coalesce(sum(amount_atomic) FILTER (WHERE type='bot_query_payment' AND status='settled'),0)::text AS settled,
         coalesce(sum(amount_atomic) FILTER (WHERE type='bot_query_payment' AND status<>'settled'),0)::text AS unsettled,
-        coalesce(sum(amount_atomic) FILTER (WHERE type='advertiser_impression_charge'),0)::text AS ad_accrued
+        coalesce(sum(amount_atomic) FILTER (WHERE type='advertiser_impression_charge'),0)::text AS ad_accrued,
+        coalesce(sum(amount_atomic) FILTER (WHERE type='advertiser_topup'),0)::text AS topups
       FROM (${LEDGER}) x WHERE at > now() - interval '7 days'${bc} GROUP BY 1 ORDER BY 1`);
     const distributions = {
-      by_provider: await q(`SELECT provider_id AS key, count(*)::int AS impressions, sum(charge_micro_usdc)::text AS atomic FROM impressions GROUP BY 1 ORDER BY sum(charge_micro_usdc) DESC, 2 DESC LIMIT 20`),
+      by_provider: await q(`SELECT provider_id AS key, count(*)::int AS impressions, sum(charge_micro_usdc)::text AS atomic FROM impressions WHERE sponsored GROUP BY 1 ORDER BY sum(charge_micro_usdc) DESC, 2 DESC LIMIT 20`),
+      sponsored_vs_organic: await q(`SELECT CASE WHEN sponsored THEN 'sponsored' ELSE 'organic' END AS key, count(*)::int AS impressions, sum(charge_micro_usdc)::text AS atomic FROM impressions GROUP BY 1 ORDER BY 1`),
       by_kind: await q(`SELECT l.kind AS key, count(*)::int AS impressions, sum(i.charge_micro_usdc)::text AS atomic FROM impressions i JOIN listings l USING (listing_id) GROUP BY 1 ORDER BY 2 DESC`),
       by_payer: await q(`SELECT payer AS key, payment_mode AS mode, count(*)::int AS queries, sum(payment_amount_atomic)::text AS atomic FROM requests GROUP BY 1,2 ORDER BY sum(payment_amount_atomic) DESC LIMIT 20`),
       by_bot: await q(`SELECT coalesce(bot_id,'(none)') AS key, count(*)::int AS queries, sum(payment_amount_atomic)::text AS atomic,
           count(*) FILTER (WHERE payment_status='settled')::int AS settled, count(*) FILTER (WHERE payment_status<>'settled')::int AS not_settled
           FROM requests GROUP BY 1 ORDER BY sum(payment_amount_atomic) DESC`),
-      by_rank: await q(`SELECT rank AS key, count(*)::int AS impressions, sum(charge_micro_usdc)::text AS atomic FROM impressions GROUP BY 1 ORDER BY 1`),
+      by_rank: await q(`SELECT rank AS key, count(*)::int AS impressions, count(*) FILTER (WHERE sponsored)::int AS sponsored, sum(charge_micro_usdc)::text AS atomic FROM impressions GROUP BY 1 ORDER BY 1`),
     };
     res.json({
       network: "base-sepolia (TESTNET)", asset: chain.usdc, units: "USDC atomic (6 decimals)",
       wallets: { payee: chain.payee, payer: chain.payer, balances: chain.balances ?? null, errors: chain.errors },
-      totals, series, distributions, ledger: rows,
+      totals, liability, series, distributions, ledger: rows,
       notes: {
-        real_onchain: "Only bot_query_payment rows with mode=x402 and status=settled whose tx receipt is 'success' are real Base Sepolia testnet USDC transfers to the payee.",
-        accrued_only: "advertiser_impression_charge rows are an off-chain accrual ledger; advertisers do not deposit or pay yet, no funds move.",
+        real_onchain: "bot_query_payment and advertiser_topup rows with mode=x402, status=settled and tx receipt 'success' are real Base Sepolia TESTNET USDC transfers to the payee.",
+        prepaid_debits: "advertiser_impression_charge rows debit the advertiser's prepaid balance (already received on-chain via top-ups, or manually credited by admin); no per-impression chain transaction.",
+        admin_credits: "advertiser_admin_credit rows are manual test credits: no funds moved on-chain, but they are spendable balance.",
+        liability: "Outstanding prepaid liability = sum of all balance-ledger entries (credits minus consumed impression charges); owed to advertisers until consumed.",
         mock: "mode=mock rows come from mock-payment mode (tests/demos) and involve no chain activity.",
       },
     });

@@ -38,7 +38,7 @@ function loadState(): any { try { return JSON.parse(readFileSync(STATE, "utf8"))
 function addSpend(bot: string, amt: bigint) { const s = loadState(); const k = today(); s[k] ??= {}; s[k][bot] = (BigInt(s[k][bot] ?? "0") + amt).toString(); writeFileSync(STATE, JSON.stringify(s, null, 1)); }
 const spent = (bot: string) => BigInt(loadState()[today()]?.[bot] ?? "0");
 const log = (bot: string, ev: string, data: object = {}) =>
-  appendFileSync(`logs/sim-${bot}.log`, JSON.stringify({ at: new Date().toISOString(), bot, ev, ...data }) + "\n");
+  appendFileSync(`logs/sim-${bot.replace(/[^A-Za-z0-9_-]/g, "_")}.log`, JSON.stringify({ at: new Date().toISOString(), bot, ev, ...data }) + "\n");
 
 const pick = <T>(a: T[]) => a[Math.floor(Math.random() * a.length)];
 const PERSONAS: Record<string, { lead: string[]; topics: string[]; tail: string[]; off: string[] }> = {
@@ -105,8 +105,71 @@ async function loop(bot: string, initialDelay: number) {
   log(bot, "stopped");
 }
 
+// ---------------- Simulated advertisers: prepay via x402 (small, capped) and bid ----------------
+const ADV_FILE = "logs/sim-advertisers.json";                 // holds advertiser API keys -> gitignored logs/
+const ADV_CAP_TOTAL = BigInt(process.env.SIM_ADV_CAP_ATOMIC ?? "50000");   // max 0.05 USDC top-ups per advertiser (lifetime)
+const ADV_TOPUP = 5000n;                                        // 0.005 USDC per top-up
+const ADV_REFILL_GAP_MS = Number(process.env.SIM_ADV_REFILL_GAP_MS ?? 20 * 60_000); // leave depletion visible before refilling
+const ADVS: Record<string, { name: string; listings: { name: string; description: string; kind: string; address: string }[]; bid: [number, number] }> = {
+  "adv:sim-scout": { name: "Scout Data (simulated)", bid: [200, 1200], listings: [
+    { name: "Scout x402 data search", kind: "x402", address: "https://scout.sim.example/v1/search", description: "Pay-per-call x402 search API over public datasets, knowledge graph data and agent service catalogues; JSON output; USDC on Base." } ] },
+  "adv:sim-forge": { name: "Forge Dev Tools (simulated)", bid: [200, 1200], listings: [
+    { name: "Forge MCP dev toolkit", kind: "mcp", address: "https://forge.sim.example/mcp", description: "Remote MCP server for coding agents: browser automation, GitHub issues and pull requests, git diff, local files." },
+    { name: "Forge MCP docs search", kind: "mcp", address: "https://forge.sim.example/docs/mcp", description: "MCP server to search developer documentation and errors for coding agents." } ] },
+};
+const envVal = (k: string) => (new RegExp(`^${k}=(.*)$`, "m").exec(existsSync(".env") ? readFileSync(".env", "utf8") : "")?.[1]?.trim());
+const LOCAL = process.env.SIM_LOCAL_URL ?? "http://127.0.0.1:8402";
+const adminH = () => ({ "content-type": "application/json", authorization: "Basic " + Buffer.from(`${envVal("DASHBOARD_USER") || "admin"}:${envVal("DASHBOARD_PASSWORD") ?? ""}`).toString("base64") });
+function loadAdv(): any { try { return JSON.parse(readFileSync(ADV_FILE, "utf8")); } catch { return {}; } }
+async function ensureAdvertiser(id: string) {
+  const st = loadAdv();
+  if (st[id]?.api_key && st[id]?.listing_ids?.length) return st[id];
+  const r = await fetch(`${LOCAL}/dashboard/api/admin/advertisers`, { method: "POST", headers: adminH(), body: JSON.stringify({ advertiser_id: id, name: ADVS[id].name }) });
+  const j: any = await r.json();
+  if (!j.api_key) throw new Error(`create advertiser ${id}: ${r.status} ${j.error}`);
+  const listing_ids: string[] = [];
+  for (const l of ADVS[id].listings) {
+    const lr: any = await (await fetch(`${LOCAL}/v1/listings`, { method: "POST", headers: adminH(), body: JSON.stringify({ provider_id: id, ...l, tags: ["simulated"] }) })).json();
+    listing_ids.push(lr.listing_id);
+  }
+  st[id] = { api_key: j.api_key, listing_ids, last_topup: 0 };
+  writeFileSync(ADV_FILE, JSON.stringify(st, null, 1));
+  return st[id];
+}
+async function advStep(id: string) {
+  const a = await ensureAdvertiser(id);
+  const B = { authorization: "Bearer " + a.api_key, "content-type": "application/json", "ngrok-skip-browser-warning": "1" };
+  const me: any = await (await fetch(`${LOCAL}/v1/advertisers/me`, { headers: B })).json();
+  // bid: random walk inside the persona's range
+  const [lo, hi] = ADVS[id].bid;
+  for (const lid of a.listing_ids) {
+    const bid = lo + Math.floor(Math.random() * (hi - lo));
+    await fetch(`${LOCAL}/v1/advertisers/me/listings/${lid}/bid`, { method: "PUT", headers: B, body: JSON.stringify({ bid_atomic: bid }) });
+  }
+  const bal = BigInt(me.balance), topped = BigInt(me.topups_onchain);
+  const st = loadAdv(); const since = Date.now() - (st[id].last_topup ?? 0);
+  if (bal < 2000n && topped + ADV_TOPUP <= ADV_CAP_TOTAL && since > ADV_REFILL_GAP_MS) {
+    const payer = await payerBalance();
+    if (payer < MIN_PAYER_BALANCE) { log(id, "GLOBAL_STOP_low_balance", {}); stopping = true; return; }
+    const r = await payFetch(`${baseUrl()}/v1/advertisers/me/topup?amount_atomic=${ADV_TOPUP}`, { method: "POST", headers: { ...B, "X-Bot-Id": id } });
+    const xpr = r.headers.get("x-payment-response"); const pr = xpr ? decodeXPaymentResponse(xpr) : null;
+    const j: any = await r.json().catch(() => ({}));
+    if (r.status === 200) { st[id].last_topup = Date.now(); writeFileSync(ADV_FILE, JSON.stringify(st, null, 1)); }
+    log(id, r.status === 200 ? "topup_ok" : "topup_FAIL", { status: r.status, amount_atomic: ADV_TOPUP.toString(), tx: pr?.transaction ?? j.settle_tx, balance_atomic: j.balance_atomic, error: j.error });
+  } else log(id, "advertiser_tick", { balance_atomic: bal.toString(), topped_onchain_atomic: topped.toString(), spend_atomic: me.spend, sponsored_impressions: Number(me.sponsored_impressions) });
+}
+async function advLoop(id: string, initialDelay: number) {
+  log(id, "start", { cap_total_atomic: ADV_CAP_TOTAL.toString(), topup_atomic: ADV_TOPUP.toString() });
+  await sleep(initialDelay);
+  while (!stopping) {
+    try { await advStep(id); } catch (e: any) { log(id, "error", { error: String(e?.shortMessage ?? e?.message ?? e).slice(0, 300) }); }
+    await sleep(120_000 + Math.random() * 120_000);
+  }
+  log(id, "stopped");
+}
+
 if (existsSync(PID)) { try { process.kill(Number(readFileSync(PID, "utf8")), 0); console.error("simulator already running"); process.exit(1); } catch {} }
 writeFileSync(PID, String(process.pid));
 const shutdown = () => { stopping = true; };
 process.on("SIGTERM", shutdown); process.on("SIGINT", shutdown);
-Promise.all([loop("research-bot", 2_000), loop("dev-bot", 20_000)]).finally(() => { try { unlinkSync(PID); } catch {} process.exit(0); });
+Promise.all([loop("research-bot", 2_000), loop("dev-bot", 20_000), advLoop("adv:sim-scout", 5_000), advLoop("adv:sim-forge", 12_000)]).finally(() => { try { unlinkSync(PID); } catch {} process.exit(0); });

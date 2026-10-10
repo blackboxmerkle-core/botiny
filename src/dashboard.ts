@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { pool } from "./db";
 import { chainView } from "./chain";
 import { financialsRouter } from "./financials";
+import { adminRouter } from "./admin";
 const q = async (sql: string, p: any[] = []) => (await pool.query(sql, p)).rows;
 
 export function apiLogger(): express.RequestHandler {
@@ -21,6 +22,7 @@ export function apiLogger(): express.RequestHandler {
 export function dashboardRouter() {
   const r = express.Router();
   r.use(financialsRouter());
+  r.use(adminRouter());
   r.get("/", (_q, res) => res.sendFile(join(__dirname, "..", "public", "dashboard.html")));
   r.get("/api/usage", async (req, res) => {
     const hours = Math.min(Number(req.query.hours ?? 24) || 24, 168);
@@ -65,10 +67,10 @@ export function dashboardRouter() {
        FROM requests r ORDER BY received_at DESC LIMIT 100`)));
   r.get("/api/requests/:id", async (req, res) => {
     const row = (await q(`SELECT request_id, received_at, catalogue_seq, embedding_model, ranker_version, request_canonical, request_hash,
-      response_canonical, response_hash, payer, payment_mode, payment_network, payment_amount_atomic::text AS amount_atomic, payment_status, settle_tx, db_txid::text, bot_id
+      response_canonical, response_hash, payer, payment_mode, payment_network, payment_amount_atomic::text AS amount_atomic, payment_status, settle_tx, db_txid::text, bot_id, settings_version, market_seq::text
       FROM requests WHERE request_id=$1`, [req.params.id]))[0];
     if (!row) return res.status(404).json({ error: "not found" });
-    const imps = await q(`SELECT i.rank, i.listing_id, i.provider_id, i.charge_micro_usdc::text AS charge, i.db_txid::text, l.name
+    const imps = await q(`SELECT i.rank, i.listing_id, i.provider_id, i.charge_micro_usdc::text AS charge, i.sponsored, i.fixed_atomic::text fixed, i.bid_atomic::text bid, i.db_txid::text, l.name
       FROM impressions i JOIN listings l USING (listing_id) WHERE request_id=$1 ORDER BY rank`, [req.params.id]);
     res.json({ ...row, request: JSON.parse(row.request_canonical), response: JSON.parse(row.response_canonical), impressions: imps });
   });

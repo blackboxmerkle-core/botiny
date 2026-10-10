@@ -67,3 +67,53 @@ CREATE INDEX IF NOT EXISTS api_log_at_idx ON api_log(at);
 -- per-bot attribution (X-Bot-Id header; untrusted label, not authentication)
 ALTER TABLE requests ADD COLUMN IF NOT EXISTS bot_id TEXT;
 ALTER TABLE api_log  ADD COLUMN IF NOT EXISTS bot_id TEXT;
+
+-- ===== Advertiser marketplace (v2) =====
+-- Versioned admin settings; each request pins settings_version. Append-only.
+CREATE TABLE IF NOT EXISTS settings_versions (
+  version     SERIAL PRIMARY KEY,
+  settings    JSONB NOT NULL,
+  changed_by  TEXT NOT NULL DEFAULT 'admin',
+  note        TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- One shared monotonic sequence for balance-ledger and bid/pause events, so a request can pin the whole
+-- advertiser state with a single number (market_seq) and replay reproduces balances/bids exactly.
+CREATE SEQUENCE IF NOT EXISTS market_seq;
+CREATE TABLE IF NOT EXISTS advertisers (
+  advertiser_id TEXT PRIMARY KEY,          -- equals listings.provider_id
+  name          TEXT NOT NULL,
+  api_key_hash  TEXT NOT NULL UNIQUE,      -- sha256 of the advertiser API key
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Append-only balance ledger (USDC atomic). Balance = SUM(delta). Never negative (checked in-transaction).
+CREATE TABLE IF NOT EXISTS balance_ledger (
+  seq           BIGINT PRIMARY KEY DEFAULT nextval('market_seq'),
+  advertiser_id TEXT NOT NULL REFERENCES advertisers(advertiser_id),
+  delta_atomic  BIGINT NOT NULL,
+  kind          TEXT NOT NULL CHECK (kind IN ('topup_x402','admin_credit','impression_debit')),
+  request_id    TEXT,                      -- for impression_debit
+  listing_id    TEXT,
+  settle_tx     TEXT,                      -- for topup_x402
+  payment_ref   TEXT UNIQUE,               -- topup payment header hash (no reuse)
+  payer         TEXT,
+  note          TEXT,
+  db_txid       BIGINT NOT NULL DEFAULT txid_current(),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS balance_ledger_adv_idx ON balance_ledger(advertiser_id, seq);
+-- Append-only bid / pause events per listing. Latest event with seq <= market_seq wins.
+CREATE TABLE IF NOT EXISTS listing_bid_events (
+  seq         BIGINT PRIMARY KEY DEFAULT nextval('market_seq'),
+  listing_id  TEXT NOT NULL REFERENCES listings(listing_id),
+  bid_atomic  BIGINT NOT NULL CHECK (bid_atomic >= 0),
+  paused      BOOLEAN NOT NULL DEFAULT false,
+  set_by      TEXT NOT NULL,               -- 'admin' | 'advertiser:<id>'
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS listing_bid_events_idx ON listing_bid_events(listing_id, seq);
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS settings_version INT;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS market_seq BIGINT;
+ALTER TABLE impressions ADD COLUMN IF NOT EXISTS sponsored BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE impressions ADD COLUMN IF NOT EXISTS fixed_atomic BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE impressions ADD COLUMN IF NOT EXISTS bid_atomic BIGINT NOT NULL DEFAULT 0;

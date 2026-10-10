@@ -5,3 +5,4 @@ export const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL ?? 
 export async function migrate() {
   await pool.query(readFileSync(join(__dirname, "..", "db", "schema.sql"), "utf8"));
 }
+export async function migrateAll() { await migrate(); const { ensureSettings } = await import("./settings"); await ensureSettings(); }

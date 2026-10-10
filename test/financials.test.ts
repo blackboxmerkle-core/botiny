@@ -11,21 +11,29 @@ before(async () => { await seed(); server = createApp().listen(0); base = `http:
 after(async () => { server.close(); await pool.end(); });
 const H = { "content-type": "application/json", ...AUTH };
 
-test("financials API: totals, ledger, distributions, filters, CSV, auth", async () => {
-  await fetch(base + "/v1/listings", { method: "POST", headers: H, body: JSON.stringify({ provider_id: "adv:fin", name: "Fin ledger reconciliation API", description: "ledger reconciliation accounting API for bots", address: "https://fin.example", cpi_micro_usdc: 400, kind: "x402" }) });
+test("financials API: totals, ledger, liability, distributions, filters, CSV, auth", async () => {
+  const lst = await (await fetch(base + "/v1/listings", { method: "POST", headers: H, body: JSON.stringify({ provider_id: "adv:fin", name: "Fin ledger reconciliation API", description: "ledger reconciliation accounting API for bots", address: "https://fin.example", kind: "x402" }) })).json();
+  const A = (p: string, body: any) => fetch(base + "/dashboard/api/admin" + p, { method: "POST", headers: H, body: JSON.stringify(body) }).then(r => r.json());
+  await A("/advertisers", { advertiser_id: "adv:fin", name: "Fin" });
+  await A("/advertisers/adv:fin/credit", { amount_atomic: 5000 });
+  await A("/listings/" + lst.listing_id, { bid_atomic: 300 });
   const before = await (await fetch(base + "/dashboard/api/financials", { headers: AUTH })).json();
   const rec = await (await fetch(base + "/v1/recommend", { method: "POST", headers: { ...H, "X-PAYMENT": "mock:fin" + Date.now() + ":0x00000000000000000000000000000000000000f1" }, body: JSON.stringify({ query: "ledger reconciliation accounting", k: 3 }) })).json();
   assert.equal(rec.response.results[0].name, "Fin ledger reconciliation API");
+  assert.equal(rec.response.results[0].sponsored, true);
   const f = await (await fetch(base + "/dashboard/api/financials", { headers: AUTH })).json();
   assert.match(f.network, /TESTNET/);
   assert.equal(f.totals.all.paid_queries, before.totals.all.paid_queries + 1);
   assert.equal(BigInt(f.totals.all.query_gross) - BigInt(before.totals.all.query_gross), 1000n);
-  assert.equal(BigInt(f.totals.all.ad_accrued) - BigInt(before.totals.all.ad_accrued), 400n);
+  assert.equal(BigInt(f.totals.all.ad_fees) - BigInt(before.totals.all.ad_fees), 400n); // fixed 100 + bid 300
+  assert.equal(f.totals.all.admin_credits, "5000");
+  assert.equal(f.liability.outstanding_prepaid_atomic, "4600");
   assert.ok(f.ledger.some((x: any) => x.request_id === rec.request_id && x.type === "bot_query_payment" && x.onchain === "n/a (mock)"));
-  assert.ok(f.ledger.some((x: any) => x.request_id === rec.request_id && x.type === "advertiser_impression_charge" && x.status === "accrued" && x.counterparty === "adv:fin"));
+  assert.ok(f.ledger.some((x: any) => x.request_id === rec.request_id && x.type === "advertiser_impression_charge" && x.status === "consumed" && x.counterparty === "adv:fin"));
+  assert.ok(f.ledger.some((x: any) => x.type === "advertiser_admin_credit" && x.counterparty === "adv:fin"));
   assert.ok(f.distributions.by_payer.some((x: any) => x.key === "0x00000000000000000000000000000000000000f1"));
-  assert.ok(f.distributions.by_rank.length >= 1 && f.distributions.by_kind.length >= 1);
-  assert.ok(f.notes.accrued_only);
+  assert.ok(f.distributions.by_rank.length >= 1 && f.distributions.sponsored_vs_organic.length >= 1);
+  assert.ok(f.notes.liability);
   const only = await (await fetch(base + "/dashboard/api/financials?type=advertiser_impression_charge", { headers: AUTH })).json();
   assert.ok(only.ledger.length > 0 && only.ledger.every((x: any) => x.type === "advertiser_impression_charge"));
   const future = await (await fetch(base + "/dashboard/api/financials?from=2099-01-01", { headers: AUTH })).json();

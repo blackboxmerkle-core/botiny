@@ -13,7 +13,8 @@ export function validateListing(b: any): string | null {
   if (b.cpi_micro_usdc !== undefined && !(Number.isSafeInteger(b.cpi_micro_usdc) && b.cpi_micro_usdc >= 0)) return "cpi_micro_usdc must be a non-negative integer";
   return null;
 }
-export async function insertListing(b: ListingInput, client: { query: PoolClient["query"] } = pool) {
+export async function insertListing(b: ListingInput, client?: { query: PoolClient["query"] }): Promise<{ listing_id: string; catalogue_seq: number }> {
+  if (!client) { const { withMarketLock } = await import("./market"); return withMarketLock(c => insertListing(b, c)); }
   const text = `${b.name}. ${b.description} ${(b.tags ?? []).join(" ")}`;
   const listing_id = "lst_" + sha256(`${b.provider_id}|${b.name}|${b.address}|${Date.now()}|${Math.random()}`).slice(0, 16);
   const r = await client.query(
