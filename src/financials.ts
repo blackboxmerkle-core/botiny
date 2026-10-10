@@ -7,12 +7,12 @@ const q = async (sql: string, p: any[] = []) => (await pool.query(sql, p)).rows;
 const LEDGER = `
   SELECT r.received_at AS at, 'bot_query_payment' AS type, r.payment_status AS status, r.payment_mode AS mode,
          r.payer AS counterparty, r.payment_amount_atomic AS amount_atomic, r.request_id, r.settle_tx, NULL::text AS listing_id,
-         NULL::int AS rank, NULL::text AS kind
+         NULL::int AS rank, NULL::text AS kind, r.bot_id
     FROM requests r
   UNION ALL
   SELECT i.created_at, 'advertiser_impression_charge', 'accrued', 'offchain', i.provider_id, i.charge_micro_usdc, i.request_id, NULL,
-         i.listing_id, i.rank, l.kind
-    FROM impressions i JOIN listings l USING (listing_id) WHERE i.charge_micro_usdc > 0`;
+         i.listing_id, i.rank, l.kind, rq.bot_id
+    FROM impressions i JOIN listings l USING (listing_id) JOIN requests rq USING (request_id) WHERE i.charge_micro_usdc > 0`;
 
 function filters(qs: any) {
   const w: string[] = [], p: any[] = [];
@@ -20,6 +20,7 @@ function filters(qs: any) {
   if (qs.to) { p.push(qs.to); w.push(`at < $${p.length}::date + 1`); }
   if (qs.type) { p.push(qs.type); w.push(`type = $${p.length}`); }
   if (qs.status) { p.push(qs.status); w.push(`status = $${p.length}`); }
+  if (qs.bot) { if (qs.bot === "(none)") w.push("bot_id IS NULL"); else { p.push(qs.bot); w.push(`bot_id = $${p.length}`); } }
   if (qs.mode) { p.push(qs.mode); w.push(`mode = $${p.length}`); }
   return { where: w.length ? "WHERE " + w.join(" AND ") : "", params: p };
 }
@@ -38,6 +39,8 @@ export function financialsRouter() {
       x.amount_atomic = String(x.amount_atomic);
       x.onchain = x.type !== "bot_query_payment" ? "n/a (accrued only)" : x.mode === "mock" ? "n/a (mock)" : x.settle_tx ? (chain.receipts[x.settle_tx] ?? "unknown") : "none";
     }
+    const bot = typeof req.query.bot === "string" && req.query.bot ? req.query.bot : null;
+    const bc = bot === "(none)" ? " AND bot_id IS NULL" : bot ? ` AND bot_id = '${bot.replace(/[^A-Za-z0-9._:-]/g, "")}'` : "";
     // Totals: London calendar day for "today".
     const win = (cond: string) => q(`SELECT
         count(*) FILTER (WHERE type='bot_query_payment')::int AS paid_queries,
@@ -48,7 +51,7 @@ export function financialsRouter() {
         coalesce(sum(amount_atomic) FILTER (WHERE type='bot_query_payment' AND mode='x402' AND status='settled'),0)::text AS query_settled_onchain,
         coalesce(sum(amount_atomic) FILTER (WHERE type='advertiser_impression_charge'),0)::text AS ad_accrued,
         count(*) FILTER (WHERE type='advertiser_impression_charge')::int AS charged_impressions
-      FROM (${LEDGER}) x WHERE ${cond}`).then(r => {
+      FROM (${LEDGER}) x WHERE ${cond}${bc}`).then(r => {
         const t = r[0]; t.avg_per_query = t.paid_queries ? String(Math.round(Number(t.query_gross) / t.paid_queries)) : "0"; return t; });
     const totals = {
       today: await win(`(at AT TIME ZONE 'Europe/London')::date = (now() AT TIME ZONE 'Europe/London')::date`),
@@ -58,11 +61,14 @@ export function financialsRouter() {
         coalesce(sum(amount_atomic) FILTER (WHERE type='bot_query_payment' AND status='settled'),0)::text AS settled,
         coalesce(sum(amount_atomic) FILTER (WHERE type='bot_query_payment' AND status<>'settled'),0)::text AS unsettled,
         coalesce(sum(amount_atomic) FILTER (WHERE type='advertiser_impression_charge'),0)::text AS ad_accrued
-      FROM (${LEDGER}) x WHERE at > now() - interval '7 days' GROUP BY 1 ORDER BY 1`);
+      FROM (${LEDGER}) x WHERE at > now() - interval '7 days'${bc} GROUP BY 1 ORDER BY 1`);
     const distributions = {
       by_provider: await q(`SELECT provider_id AS key, count(*)::int AS impressions, sum(charge_micro_usdc)::text AS atomic FROM impressions GROUP BY 1 ORDER BY sum(charge_micro_usdc) DESC, 2 DESC LIMIT 20`),
       by_kind: await q(`SELECT l.kind AS key, count(*)::int AS impressions, sum(i.charge_micro_usdc)::text AS atomic FROM impressions i JOIN listings l USING (listing_id) GROUP BY 1 ORDER BY 2 DESC`),
       by_payer: await q(`SELECT payer AS key, payment_mode AS mode, count(*)::int AS queries, sum(payment_amount_atomic)::text AS atomic FROM requests GROUP BY 1,2 ORDER BY sum(payment_amount_atomic) DESC LIMIT 20`),
+      by_bot: await q(`SELECT coalesce(bot_id,'(none)') AS key, count(*)::int AS queries, sum(payment_amount_atomic)::text AS atomic,
+          count(*) FILTER (WHERE payment_status='settled')::int AS settled, count(*) FILTER (WHERE payment_status<>'settled')::int AS not_settled
+          FROM requests GROUP BY 1 ORDER BY sum(payment_amount_atomic) DESC`),
       by_rank: await q(`SELECT rank AS key, count(*)::int AS impressions, sum(charge_micro_usdc)::text AS atomic FROM impressions GROUP BY 1 ORDER BY 1`),
     };
     res.json({
@@ -78,7 +84,7 @@ export function financialsRouter() {
   });
   r.get("/api/financials.csv", async (req, res) => {
     const rows = await ledger(req.query, 100000);
-    const cols = ["at", "type", "status", "mode", "counterparty", "amount_atomic", "amount_usdc", "request_id", "settle_tx", "listing_id", "rank", "kind"];
+    const cols = ["at", "bot_id", "type", "status", "mode", "counterparty", "amount_atomic", "amount_usdc", "request_id", "settle_tx", "listing_id", "rank", "kind"];
     const cell = (v: any) => { const s = v == null ? "" : v instanceof Date ? v.toISOString() : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
     const csv = [cols.join(","), ...rows.map(x => cols.map(c => cell(c === "amount_usdc" ? (Number(x.amount_atomic) / 1e6).toFixed(6) : x[c])).join(","))].join("\n");
     res.set("content-type", "text/csv").set("content-disposition", `attachment; filename="bot-rec-market-ledger-testnet.csv"`).send(csv + "\n");

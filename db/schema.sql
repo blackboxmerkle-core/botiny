@@ -63,3 +63,7 @@ CREATE TABLE IF NOT EXISTS api_log (
   error       TEXT
 );
 CREATE INDEX IF NOT EXISTS api_log_at_idx ON api_log(at);
+
+-- per-bot attribution (X-Bot-Id header; untrusted label, not authentication)
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS bot_id TEXT;
+ALTER TABLE api_log  ADD COLUMN IF NOT EXISTS bot_id TEXT;

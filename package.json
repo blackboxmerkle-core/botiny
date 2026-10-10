@@ -10,7 +10,10 @@
     "typecheck": "tsc --noEmit",
     "start:mock": "PAYMENT_MODE=mock tsx src/server.ts",
     "pay:balance": "tsx scripts/payer-balance.ts",
-    "pay:recommend": "tsx scripts/pay-recommend.ts"
+    "pay:recommend": "tsx scripts/pay-recommend.ts",
+    "sim:start": "mkdir -p logs && nohup tsx scripts/sim-bots.ts >> logs/sim-main.log 2>&1 &",
+    "sim:stop": "bash scripts/sim-stop.sh",
+    "supervise": "nohup bash scripts/supervise.sh > /dev/null 2>&1 &"
   },
   "keywords": [],
   "author": "",

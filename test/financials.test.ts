@@ -33,8 +33,25 @@ test("financials API: totals, ledger, distributions, filters, CSV, auth", async 
   const csv = await fetch(base + "/dashboard/api/financials.csv?type=bot_query_payment", { headers: AUTH });
   assert.match(csv.headers.get("content-type")!, /text\/csv/);
   const lines = (await csv.text()).trim().split("\n");
-  assert.match(lines[0], /^at,type,status,mode,counterparty,amount_atomic,amount_usdc/);
+  assert.match(lines[0], /^at,bot_id,type,status,mode,counterparty,amount_atomic,amount_usdc/);
   assert.ok(lines.some(l => l.includes(rec.request_id) && l.includes("0.001000")));
   assert.equal((await fetch(base + "/dashboard/api/financials")).status, 401);
   assert.equal((await fetch(base + "/dashboard/api/financials.csv")).status, 401);
+});
+
+test("per-bot attribution: X-Bot-Id recorded and filterable in usage + financials", async () => {
+  const mk = (bot: string, n: string) => fetch(base + "/v1/recommend", { method: "POST", headers: { ...H, "X-Bot-Id": bot, "X-PAYMENT": "mock:" + n + Date.now() }, body: JSON.stringify({ query: "mcp server github", k: 2 }) }).then(r => r.json());
+  const a = await mk("research-bot", "a"), b = await mk("dev-bot", "b");
+  await fetch(base + "/v1/recommend", { method: "POST", headers: { ...H, "X-Bot-Id": "bad id!", "X-PAYMENT": "mock:c" + Date.now() }, body: JSON.stringify({ query: "x" }) });
+  await new Promise(r => setTimeout(r, 150));
+  const rows = (await pool.query("SELECT request_id, bot_id FROM requests WHERE request_id = ANY($1)", [[a.request_id, b.request_id]])).rows;
+  assert.deepEqual(Object.fromEntries(rows.map(r => [r.request_id, r.bot_id])), { [a.request_id]: "research-bot", [b.request_id]: "dev-bot" });
+  const u = await (await fetch(base + "/dashboard/api/usage?bot=dev-bot", { headers: AUTH })).json();
+  assert.ok(u.recent.length > 0 && u.recent.every((r: any) => r.bot_id === "dev-bot"));
+  assert.ok(u.by_bot.some((r: any) => r.bot_id === "research-bot" && r.paid_ok >= 1));
+  const f = await (await fetch(base + "/dashboard/api/financials?bot=research-bot", { headers: AUTH })).json();
+  assert.ok(f.ledger.length > 0 && f.ledger.every((x: any) => x.bot_id === "research-bot"));
+  assert.equal(f.totals.all.paid_queries, 1);
+  assert.ok(f.distributions.by_bot.some((x: any) => x.key === "dev-bot"));
+  assert.equal((await pool.query("SELECT count(*)::int n FROM requests WHERE bot_id IS NULL AND request_canonical LIKE '%\"query\":\"x\"%'")).rows[0].n, 1); // invalid id -> NULL
 });

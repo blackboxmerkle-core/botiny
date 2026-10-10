@@ -28,7 +28,9 @@ button.act{background:var(--acc);color:#000;border:0;padding:6px 12px;border-rad
 <nav><button data-t="usage" class="on">API usage</button><button data-t="fin">Financials</button><button data-t="tx">Transactions</button><button data-t="req">Requests</button><button data-t="adv">Advertisers</button><button data-t="cat">Catalogue</button></nav></header>
 <main>
 <section id="t-usage">
+ <div class="filters">Bot <select id="u-bot"><option value="">all bots</option></select></div>
  <div class="grid" id="kpis"></div>
+ <div class="card" style="margin-top:16px"><h2>Per-bot activity (24h)</h2><table id="bybot"></table></div>
  <div class="card" style="margin-top:16px"><h2>Requests over time (10-min buckets, 24h) <span class="mut" style="text-transform:none">· green 200 · amber 402 · red other errors</span></h2><div class="bar" id="chart"></div></div>
  <div class="two" style="margin-top:16px">
   <div class="card"><h2>By endpoint / status</h2><table id="byroute"></table></div>
@@ -45,12 +47,14 @@ button.act{background:var(--acc);color:#000;border:0;padding:6px 12px;border-rad
   <div class="card"><h2>Impressions by service kind</h2><div id="d-kind"></div></div>
   <div class="card"><h2>Query revenue by payer wallet</h2><div id="d-payer"></div></div>
   <div class="card"><h2>Impression share by rank</h2><div id="d-rank"></div></div>
+  <div class="card"><h2>Query revenue by bot</h2><div id="d-bot"></div></div>
  </div>
  <div class="card" style="margin-top:16px"><h2>What is real vs accrued</h2><ul id="notes" class="mut"></ul></div>
  <div class="card" style="margin-top:16px"><h2>Ledger (all money movements)</h2>
   <div class="filters">From <input type="date" id="f-from"> To <input type="date" id="f-to">
    <select id="f-type"><option value="">all types</option><option value="bot_query_payment">bot query payment (in)</option><option value="advertiser_impression_charge">advertiser impression charge (accrued)</option></select>
    <select id="f-status"><option value="">all statuses</option><option>settled</option><option>verified</option><option>settle_failed</option><option>accrued</option></select>
+   <select id="f-bot"><option value="">all bots</option></select>
    <select id="f-mode"><option value="">all modes</option><option>x402</option><option>mock</option><option>offchain</option></select>
    <button class="act" id="f-apply">Apply</button> <a id="csv" class="act" href="api/financials.csv" style="text-decoration:none;padding:6px 12px;border-radius:6px">⬇ CSV</a></div>
   <table id="ledger"></table></div>
@@ -78,24 +82,26 @@ const addr=a=>`<a target=_blank href="https://sepolia.basescan.org/address/${a}"
 const st=s=>`<span class="badge ${s==="settled"?"g":s==="verified"?"y":"r"}">${esc(s)}</span>`;
 let tab="usage";
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{tab=b.dataset.t;document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x===b));document.querySelectorAll("main>section").forEach(s=>s.classList.toggle("hide",s.id!=="t-"+tab));load()});
-async function usage(){const u=await j("api/usage");
+async function usage(){const ub=$("#u-bot").value;const u=await j("api/usage"+(ub?"?bot="+encodeURIComponent(ub):""));
+ fillBots("#u-bot",u.by_bot.map(b=>b.bot_id));
+ $("#bybot").innerHTML="<tr><th>Bot</th><th>Calls</th><th>Paid OK</th><th>402</th><th>Replays</th><th>Errors</th><th>Last</th></tr>"+u.by_bot.map(b=>`<tr class="click" onclick="$('#u-bot').value='${esc(b.bot_id)}';usage()"><td><code>${esc(b.bot_id)}</code></td><td>${b.calls}</td><td class="s2">${b.paid_ok}</td><td class="s4">${b.s402}</td><td>${b.replays}</td><td class="${b.errors?"s5":""}">${b.errors}</td><td>${t(b.last_at)}</td></tr>`).join("");
  const tot=u.by_route.reduce((a,r)=>a+r.n,0),f=k=>u.by_route.filter(k).reduce((a,r)=>a+r.n,0);
  $("#kpis").innerHTML=[["Calls (24h)",tot],["200 OK",f(r=>r.status===200)],["402 Payment required",f(r=>r.status===402)],["409 Conflict",f(r=>r.status===409)],["5xx errors",f(r=>r.status>=500)],["Paid recommends",f(r=>r.status===200&&r.route==="/v1/recommend")]].map(([k,v])=>`<div class="card kpi">${v}<small>${k}</small></div>`).join("");
  const mx=Math.max(1,...u.series.map(s=>s.total));
  $("#chart").innerHTML=u.series.length?u.series.map(s=>`<div title="${s.bucket}: ${s.total}"><span class="b-ok" style="height:${s.ok/mx*100}px"></span><span class="b-402" style="height:${s.s402/mx*100}px"></span><span class="b-err" style="height:${s.other_err/mx*100}px"></span></div>`).join(""):'<span class="mut">no traffic yet</span>';
  $("#byroute").innerHTML="<tr><th>Method</th><th>Route</th><th>Status</th><th>Count</th><th>Avg ms</th></tr>"+u.by_route.map(r=>`<tr><td>${r.method}</td><td><code>${esc(r.route)}</code></td><td class="${sc(r.status)}">${r.status}</td><td>${r.n}</td><td>${r.avg_ms}</td></tr>`).join("");
- $("#recent").innerHTML="<tr><th>Time</th><th>Call</th><th>Status</th><th>ms</th><th>Request / error</th></tr>"+u.recent.map(r=>`<tr><td>${t(r.at)}</td><td>${r.method} <code>${esc(r.route)}</code></td><td class="${sc(r.status)}">${r.status}</td><td>${r.ms}</td><td>${r.request_id?`<a href="#" onclick="openReq('${r.request_id}');return false"><code>${short(r.request_id)}</code></a>`:""} <span class="mut">${esc(r.error||"")}</span></td></tr>`).join("");}
+ $("#recent").innerHTML="<tr><th>Time</th><th>Call</th><th>Status</th><th>ms</th><th>Request / error</th></tr>"+u.recent.map(r=>`<tr><td>${t(r.at)}</td><td>${r.bot_id?`<span class="badge y">${esc(r.bot_id)}</span> `:""}${r.method} <code>${esc(r.route)}</code></td><td class="${sc(r.status)}">${r.status}</td><td>${r.ms}</td><td>${r.request_id?`<a href="#" onclick="openReq('${r.request_id}');return false"><code>${short(r.request_id)}</code></a>`:""} <span class="mut">${esc(r.error||"")}</span></td></tr>`).join("");}
 async function txv(){const [p,c]=await Promise.all([j("api/payments"),j("api/chain")]);
  $("#chainkpi").innerHTML=[["Payee USDC (on-chain)",c.balances?.payee??"?",addr(c.payee)],["Payer USDC (on-chain)",c.balances?.payer??"?",addr(c.payer)],["Base Sepolia head",c.head??"?","chain 84532"],["Unconfirmed settled",c.unconfirmed,"off-chain settled w/o on-chain proof"]].map(([k,v,s])=>`<div class="card kpi">${v}<small>${k}<br>${s}</small></div>`).join("")+(c.errors.length?`<div class="card s5">RPC: ${esc(c.errors.join("; "))}</div>`:"");
  $("#recon").innerHTML=c.reconciliation.length?"<table><tr><th>Request</th><th>Settle tx</th><th>Receipt</th><th></th></tr>"+c.reconciliation.map(r=>`<tr><td><code>${short(r.request_id)}</code></td><td>${tx(r.settle_tx)}</td><td>${esc(r.receipt)}</td><td>${r.confirmed?'<span class="badge g">confirmed</span>':'<span class="badge r">NOT CONFIRMED</span>'}</td></tr>`).join("")+"</table>":'<span class="mut">No x402-mode settled payments yet (mock-mode payments are excluded from on-chain reconciliation).</span>';
  $("#pays").innerHTML="<tr><th>Time</th><th>Payer</th><th>USDC</th><th>Mode</th><th>Status</th><th>Tx</th></tr>"+p.payments.map(r=>`<tr class="click" onclick="openReq('${r.request_id}')"><td>${t(r.received_at)}</td><td><code>${short(r.payer)}</code></td><td>${usdc(r.amount_atomic)}</td><td>${r.payment_mode}</td><td>${st(r.payment_status)}</td><td>${r.payment_mode==="x402"?tx(r.settle_tx):'<span class="mut">mock</span>'}</td></tr>`).join("");
  $("#transfers").innerHTML=c.transfers.length?"<tr><th>Block</th><th>From</th><th>USDC</th><th>Tx</th></tr>"+c.transfers.map(x=>`<tr><td>${x.block}</td><td><code>${short(x.from)}</code></td><td>${x.value}</td><td>${tx(x.tx)}</td></tr>`).join(""):'<tr><td class="mut">No USDC transfers to payee in window.</td></tr>';}
 async function reqs(){const r=await j("api/requests");
- $("#reqs").innerHTML="<tr><th>Time</th><th>Query</th><th>#</th><th>Status</th><th>Hash</th></tr>"+r.map(x=>`<tr class="click" onclick="openReq('${x.request_id}')"><td>${t(x.received_at)}</td><td>${esc(x.query)}</td><td>${x.n}</td><td>${st(x.payment_status)}</td><td><code>${short(x.response_hash)}</code></td></tr>`).join("");}
+ $("#reqs").innerHTML="<tr><th>Time</th><th>Bot</th><th>Query</th><th>#</th><th>Status</th><th>Hash</th></tr>"+r.map(x=>`<tr class="click" onclick="openReq('${x.request_id}')"><td>${t(x.received_at)}</td><td><code>${esc(x.bot_id||'—')}</code></td><td>${esc(x.query)}</td><td>${x.n}</td><td>${st(x.payment_status)}</td><td><code>${short(x.response_hash)}</code></td></tr>`).join("");}
 async function openReq(id){ if(tab!=="req") document.querySelector('nav button[data-t=req]').click();
  const r=await j("api/requests/"+id);
  $("#detail").innerHTML=`<h2>Request detail</h2><table>
- <tr><th>ID</th><td><code>${esc(r.request_id)}</code></td></tr><tr><th>Received</th><td>${d(r.received_at)}</td></tr>
+ <tr><th>ID</th><td><code>${esc(r.request_id)}</code></td></tr><tr><th>Bot</th><td><code>${esc(r.bot_id||"—")}</code></td></tr><tr><th>Received</th><td>${d(r.received_at)}</td></tr>
  <tr><th>Query</th><td><b>${esc(r.request.query)}</b> (k=${r.request.k})</td></tr>
  <tr><th>Catalogue seq</th><td>${r.catalogue_seq}</td></tr><tr><th>Embedding</th><td><code>${esc(r.embedding_model)}</code></td></tr><tr><th>Ranker</th><td><code>${esc(r.ranker_version)}</code></td></tr>
  <tr><th>Request hash</th><td><code>${esc(r.request_hash)}</code></td></tr><tr><th>Response hash</th><td><code>${esc(r.response_hash)}</code></td></tr>
@@ -113,9 +119,10 @@ function drawCat(){const f=$("#filter").value.toLowerCase();
  $("#cat").innerHTML="<tr><th>Seq</th><th>Name</th><th>Kind</th><th>Provider</th><th>CPI USDC</th><th>Impr.</th><th>Source</th></tr>"+catData.filter(x=>!f||JSON.stringify(x).toLowerCase().includes(f)).map(x=>`<tr title="${esc(x.description)}"><td>${x.seq}</td><td><b>${esc(x.name)}</b>${x.superseded?' <span class="badge y">superseded</span>':""}<br><code class="mut">${esc(x.address)}</code></td><td>${esc(x.kind)}</td><td><code>${esc(x.provider_id)}</code></td><td>${usdc(x.cpi)}</td><td>${x.impressions}</td><td>${x.source_url?`<a target=_blank href="${esc(x.source_url)}">source</a>`:""}</td></tr>`).join("");}
 $("#filter").oninput=drawCat;
 
+const fillBots=(sel,ids)=>{const e=$(sel),cur=e.value,have=new Set([...e.options].map(o=>o.value));ids.forEach(b=>{if(!have.has(b)){const o=document.createElement('option');o.value=o.textContent=b;e.appendChild(o)}});e.value=cur;};
 const U6=a=>(Number(a||0)/1e6).toFixed(6);
 const hbars=(rows,val,lab)=>{const mx=Math.max(1e-12,...rows.map(val));return rows.length?rows.map(r=>`<div class="hb"><span title="${esc(r.key)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><code>${esc(r.key)}</code></span><div class="t"><span style="width:${val(r)/mx*100}%"></span></div><span>${lab(r)}</span></div>`).join(""):'<span class="mut">no data</span>';};
-function finQS(){const p=new URLSearchParams();[["from","f-from"],["to","f-to"],["type","f-type"],["status","f-status"],["mode","f-mode"]].forEach(([k,id])=>{const v=document.getElementById(id).value;if(v)p.set(k,v)});return p.toString();}
+function finQS(){const p=new URLSearchParams();[["bot","f-bot"],["from","f-from"],["to","f-to"],["type","f-type"],["status","f-status"],["mode","f-mode"]].forEach(([k,id])=>{const v=document.getElementById(id).value;if(v)p.set(k,v)});return p.toString();}
 async function fin(){const f=await j("api/financials?"+finQS());$("#csv").href="api/financials.csv?"+finQS();
  const b=f.wallets.balances||{};
  $("#wallets").innerHTML=[["Payee (receives query payments)",f.wallets.payee,b.payee,b.payee_eth],["Payer (test bot wallet)",f.wallets.payer,b.payer,b.payer_eth]].map(([k,a,u,e])=>`<div class="card kpi">${u??"?"} <span style="font-size:13px">USDC</span><small>${e??"?"} ETH · ${k}<br>${addr(a)}</small></div>`).join("")+(f.wallets.errors.length?`<div class="card s5">RPC: ${esc(f.wallets.errors.join("; "))}</div>`:"");
@@ -124,13 +131,14 @@ async function fin(){const f=await j("api/financials?"+finQS());$("#csv").href="
  const S=f.series,mx=Math.max(1,...S.map(s=>+s.settled+ +s.unsettled+ +s.ad_accrued));
  $("#revchart").innerHTML=S.length?S.map(s=>`<div title="${s.bucket}: settled ${U6(s.settled)} · unsettled ${U6(s.unsettled)} · ad ${U6(s.ad_accrued)}"><span class="b-ok" style="height:${s.settled/mx*100}px"></span><span class="b-402" style="height:${s.unsettled/mx*100}px"></span><span class="b-ad" style="height:${s.ad_accrued/mx*100}px"></span></div>`).join(""):'<span class="mut">no revenue yet</span>';
  $("#revaxis").textContent=S.length?`${S[0].bucket} → ${S[S.length-1].bucket} · peak ${U6(mx)} USDC/h`:"";
- const D=f.distributions;
+ const D=f.distributions;fillBots("#f-bot",D.by_bot.map(b=>b.key));
+ $("#d-bot").innerHTML=hbars(D.by_bot,r=>+r.atomic,r=>`${U6(r.atomic)} · ${r.queries} q · ${r.settled} ✓${r.not_settled?" · "+r.not_settled+" ✗":""}`);
  $("#d-prov").innerHTML=hbars(D.by_provider,r=>+r.atomic||0,r=>`${U6(r.atomic)} · ${r.impressions} imp`);
  $("#d-kind").innerHTML=hbars(D.by_kind,r=>r.impressions,r=>`${r.impressions} imp · ${U6(r.atomic)}`);
  $("#d-payer").innerHTML=hbars(D.by_payer.map(r=>({...r,key:r.key+" ("+r.mode+")"})),r=>+r.atomic,r=>`${U6(r.atomic)} · ${r.queries} q`);
  const ti=D.by_rank.reduce((a,r)=>a+r.impressions,0)||1;$("#d-rank").innerHTML=hbars(D.by_rank.map(r=>({...r,key:"rank "+r.key})),r=>r.impressions,r=>`${(r.impressions/ti*100).toFixed(1)}%`);
  $("#notes").innerHTML=Object.entries(f.notes).map(([k,v])=>`<li><b>${k.replace("_"," ")}:</b> ${esc(v)}</li>`).join("");
- $("#ledger").innerHTML="<tr><th>Time</th><th>Type</th><th>Status</th><th>Mode</th><th>Counterparty</th><th>USDC</th><th>Request</th><th>On-chain</th></tr>"+f.ledger.map(x=>`<tr><td>${d(x.at)}</td><td>${x.type==="bot_query_payment"?"query payment in":"ad charge (accrued)"}</td><td>${x.status==="accrued"?'<span class="badge y">accrued</span>':st(x.status)}</td><td>${esc(x.mode)}</td><td><code>${esc(x.counterparty)}</code></td><td>${U6(x.amount_atomic)}</td><td><a href="#" onclick="openReq('${x.request_id}');return false"><code>${short(x.request_id)}</code></a></td><td>${x.settle_tx?tx(x.settle_tx)+" ":""}<span class="mut">${esc(x.onchain)}</span></td></tr>`).join("")+(f.ledger.length?"":'<tr><td class="mut" colspan=8>No ledger entries for these filters.</td></tr>');}
+ $("#ledger").innerHTML="<tr><th>Time</th><th>Bot</th><th>Type</th><th>Status</th><th>Mode</th><th>Counterparty</th><th>USDC</th><th>Request</th><th>On-chain</th></tr>"+f.ledger.map(x=>`<tr><td>${d(x.at)}</td><td><code>${esc(x.bot_id||"—")}</code></td><td>${x.type==="bot_query_payment"?"query payment in":"ad charge (accrued)"}</td><td>${x.status==="accrued"?'<span class="badge y">accrued</span>':st(x.status)}</td><td>${esc(x.mode)}</td><td><code>${esc(x.counterparty)}</code></td><td>${U6(x.amount_atomic)}</td><td><a href="#" onclick="openReq('${x.request_id}');return false"><code>${short(x.request_id)}</code></a></td><td>${x.settle_tx?tx(x.settle_tx)+" ":""}<span class="mut">${esc(x.onchain)}</span></td></tr>`).join("")+(f.ledger.length?"":'<tr><td class="mut" colspan=8>No ledger entries for these filters.</td></tr>');}
 $("#f-apply").onclick=()=>fin();
 const loaders={usage,fin,tx:txv,req:reqs,adv,cat};
 async function load(){try{loaders[tab]()}catch(e){console.error(e)}}

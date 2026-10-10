@@ -9,6 +9,8 @@ import { apiLogger, dashboardRouter } from "./dashboard";
 import { basicAuth } from "./auth";
 import { verifyPayment, settlePayment, requirements, MODE, NETWORK } from "./payment";
 
+export const botId = (req: express.Request) => { const b = req.get("X-Bot-Id"); return b && /^[A-Za-z0-9._:-]{1,64}$/.test(b) ? b : null; };
+
 export function createApp() {
   const app = express();
   app.use(express.json({ limit: "64kb" }));
@@ -42,10 +44,10 @@ export function createApp() {
       out = await rank(client, { ...inp, catalogue_seq: seq, embedding_model: EMBEDDING_MODEL, ranker_version: RANKER_VERSION });
       await client.query(
         `INSERT INTO requests(request_id,catalogue_seq,embedding_model,ranker_version,request_canonical,request_hash,
-           response_canonical,response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_ref,payment_status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'verified')`,
+           response_canonical,response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_ref,payment_status,bot_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'verified',$14)`,
         [request_id, seq, EMBEDDING_MODEL, RANKER_VERSION, reqCanon, sha256(reqCanon), out.canonical, out.hash,
-         pay.payer, pay.mode, NETWORK, pay.amount.toString(), pay.ref]);
+         pay.payer, pay.mode, NETWORK, pay.amount.toString(), pay.ref, botId(req)]);
       for (let i = 0; i < out.meta.length; i++) {
         const m = out.meta[i];
         await client.query(`INSERT INTO impressions(request_id,rank,listing_id,provider_id,charge_micro_usdc) VALUES ($1,$2,$3,$4,$5)`,
@@ -82,7 +84,7 @@ export function createApp() {
   // Audit (cheap): one request with its impressions, and per-provider spend.
   app.get("/v1/requests/:id", async (req, res) => {
     const r = (await pool.query(`SELECT request_id,received_at,catalogue_seq,embedding_model,ranker_version,request_canonical,request_hash,
-      response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_status,settle_tx,db_txid FROM requests WHERE request_id=$1`, [req.params.id])).rows[0];
+      response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_status,settle_tx,db_txid,bot_id FROM requests WHERE request_id=$1`, [req.params.id])).rows[0];
     if (!r) return res.status(404).json({ error: "not found" });
     const imp = (await pool.query("SELECT rank,listing_id,provider_id,charge_micro_usdc FROM impressions WHERE request_id=$1 ORDER BY rank", [req.params.id])).rows;
     res.json({ ...r, impressions: imp });

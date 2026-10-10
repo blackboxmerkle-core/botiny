@@ -64,3 +64,12 @@ Tests use a separate database (botrec_test) and mock payments. Screenshots: `npx
 /dashboard → Financials (basic auth). JSON: GET /dashboard/api/financials?from=YYYY-MM-DD&to=YYYY-MM-DD&type=bot_query_payment|advertiser_impression_charge&status=settled|verified|settle_failed|accrued&mode=x402|mock|offchain ;
 CSV: /dashboard/api/financials.csv (same filters). Wallet balances (USDC + ETH) are live Base Sepolia reads. Ledger = bot query payments (off-chain status + on-chain receipt)
 UNION advertiser impression charges with charge > 0 (ACCRUED ONLY — advertisers don't pay in yet). Totals: today (Europe/London day), 7d, all-time. Screenshot: `npx tsx scripts/screenshot-fin.ts` (reads .env creds).
+
+## Simulator bots (live testnet traffic)
+- `npm run sim:start` — background process running `research-bot` and `dev-bot` (X-Bot-Id header), each making a REAL x402 payment on Base Sepolia
+  every 1–3 min (SIM_MIN_MS/SIM_MAX_MS) to PUBLIC_BASE_URL (re-read from .env each call). ~15% off-catalogue queries; 25% of steps replay-verify a past request instead.
+- Safety: only pays exact/base-sepolia/testnet-USDC requirements ≤ 0.01 USDC; per-bot daily budget 0.5 USDC (SIM_DAILY_BUDGET_ATOMIC, tracked in logs/sim-state.json);
+  global stop if payer USDC < 1. Key from PAYER_PRIVATE_KEY only, never logged.
+- `npm run sim:stop` — graceful SIGTERM via logs/sim.pid. Logs: logs/sim-research-bot.log, logs/sim-dev-bot.log (JSON lines), logs/sim-main.log.
+- `npm run supervise` — scripts/supervise.sh keeps server + ngrok alive (30s checks), rewrites PUBLIC_BASE_URL and restarts the server if the ngrok URL changes. Stop: `kill $(cat logs/supervise.pid)`.
+- Dashboard: per-bot table + bot filter on API usage; bot filter, "Query revenue by bot" and bot column on Financials; bot shown in Requests.
