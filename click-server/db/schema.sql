@@ -54,3 +54,20 @@ CREATE TABLE IF NOT EXISTS incentive_ledger (       -- append-only
   release_after TIMESTAMPTZ, reason TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE UNIQUE INDEX IF NOT EXISTS incentive_one_accrual ON incentive_ledger(entry_id) WHERE kind IN ('accrue_held','review_hold');
 CREATE INDEX IF NOT EXISTS incentive_bot ON incentive_ledger(bot_wallet, entry_id);
+
+-- ---- settlement + binding (click-settlement) ----
+ALTER TABLE proofs ADD COLUMN IF NOT EXISTS binding TEXT NOT NULL DEFAULT 'header' CHECK (binding IN ('header','signature'));
+ALTER TABLE proofs ADD COLUMN IF NOT EXISTS bot_wallet TEXT;
+ALTER TABLE incentive_ledger DROP CONSTRAINT IF EXISTS incentive_ledger_click_id_fkey;  -- clicks may be purged (90d) while ledger stays
+CREATE TABLE IF NOT EXISTS bot_api_keys (           -- end-user keys seen on a wallet's own API calls (self-click detection)
+  bot_wallet TEXT NOT NULL, end_user_key TEXT NOT NULL, at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (bot_wallet, end_user_key));
+CREATE TABLE IF NOT EXISTS cluster_keys (cluster_id TEXT NOT NULL, end_user_key TEXT NOT NULL, PRIMARY KEY (cluster_id, end_user_key));
+CREATE TABLE IF NOT EXISTS cluster_wallets (cluster_id TEXT NOT NULL, wallet TEXT NOT NULL, PRIMARY KEY (cluster_id, wallet));
+CREATE TABLE IF NOT EXISTS click_strikes (id BIGSERIAL PRIMARY KEY, bot_wallet TEXT NOT NULL, reason TEXT NOT NULL, click_id TEXT, at TIMESTAMPTZ NOT NULL);
+CREATE TABLE IF NOT EXISTS used_signatures (sig_hash TEXT PRIMARY KEY, expires_at TIMESTAMPTZ NOT NULL);
+-- One row per line item whose escrow went back to the provider (unclaimed/expired or clawed back).
+-- The money movement itself is a balance_ledger 'incentive_escrow_reversal' row (seq recorded here).
+CREATE TABLE IF NOT EXISTS escrow_refunds (
+  entry_id TEXT PRIMARY KEY, token TEXT NOT NULL REFERENCES harvest_tokens(token), line TEXT NOT NULL CHECK (line IN ('show','click')),
+  provider_id TEXT NOT NULL, amount_atomic BIGINT NOT NULL CHECK (amount_atomic > 0),
+  reason TEXT NOT NULL CHECK (reason IN ('unclaimed','clawback')), balance_ledger_seq BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT now());

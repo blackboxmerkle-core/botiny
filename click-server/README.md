@@ -15,3 +15,8 @@ Click server + incentive ledger for Bot Source. Specs: `Click_Server_Spec.md`, `
 Integration with `api/` (not done here): `/v1/recommend` calls `engine.issueSet` after ranking, debits `escrow_atomic` as a new `balance_ledger` kind `incentive_escrow`, and calls `noteBotApiCall` for self-click detection. The incentive ledger stays separate from per-impression debits.
 
 `npm test` (node:test, no deps).
+
+## Settlement, Postgres store, wallet binding (click-settlement)
+- `src/pg-store.js` – Postgres store (same async interface as MemoryStore; injected `query`, no deps). The API scores clicks with it under `CLICK_LEDGER_LOCK`.
+- Escrow lifecycle (API `src/clicks.ts`): issue → `incentive_escrow` (−) per provider; click/show accrue → held → vest after holdback (stays spent); unclaimed after deadline+grace, or clawed back → `incentive_escrow_reversal` (+) per line, `escrow_ref` UNIQUE (idempotent), recorded in `escrow_refunds`. Settlement holds MARKET_LOCK + CLICK_LEDGER_LOCK.
+- `src/binding.js` – EIP-191 signed bot requests (`X-Bot-Wallet`, `X-Bot-Timestamp`, `X-Bot-Signature` over method/path/wallet/timestamp/body-sha256), ±5 min skew, single-use signatures. Legacy unsigned proofs are accepted only while `allowUnsignedBotRequests` is on and are stored `binding='header'`.

@@ -15,7 +15,7 @@ import { payToState } from "./wallets";
 import { activeChains, relayerAddress } from "./relayer";
 import { currentSettings } from "./settings";
 import { MARKET_LOCK, marketSeq, assertNonNegative, advertiserByKey, advertiserSummary, setBid, setIncentive, credit } from "./market";
-import { issueClickLinks } from "./clicks";
+import { issueClickLinks, pgEngine, scoreClick, settleIncentives, clawbackClick, clearReview, earnings, clickKeys } from "./clicks";
 
 export const botId = (req: express.Request) => { const b = req.get("X-Bot-Id"); return b && /^[A-Za-z0-9._:-]{1,64}$/.test(b) ? b : null; };
 const publicBase = (req: express.Request) => process.env.PUBLIC_BASE_URL?.replace(/\/$/, "") ?? `${req.protocol}://${req.get("host")}`;
@@ -24,7 +24,7 @@ export const TOPUP_MIN = 1000, TOPUP_MAX = 100_000; // 0.001 .. 0.1 test USDC pe
 
 export function createApp() {
   const app = express();
-  app.use(express.json({ limit: "64kb" }));
+  app.use(express.json({ limit: "64kb", verify: (req: any, _res, buf) => { req.rawBody = buf.toString("utf8"); } }));
   app.use(apiLogger());
   app.use("/dashboard", basicAuth(), dashboardRouter()); // HTTP basic auth (admin / DASHBOARD_PASSWORD)
   app.get("/v1/health", async (_q, r) => {
@@ -92,7 +92,8 @@ export function createApp() {
         }
       }
       // click-server: signed per-result links + incentive escrow, same transaction; kept out of response_hash
-      const cl = await issueClickLinks(client, { request_id, bot_wallet: (pay.payer || botId(req) || "unknown").toLowerCase(), channel: req.get("X-Bot-Channel"),
+      const cl = await issueClickLinks(client, { request_id, bot_wallet: pay.payer, channel: req.get("X-Bot-Channel"),
+        client_req: { ip: req.ip, ua: req.get("user-agent") ?? "", acceptLanguage: req.get("accept-language") ?? "" },
         market_seq: mseq, settings: out.settings ?? settings, results: out.body.results, providers: out.meta.map((m: any) => m.provider_id) });
       click_links = cl.click_links;
       debited.push(...cl.debited);
@@ -157,6 +158,47 @@ export function createApp() {
   app.put("/v1/advertisers/me/listings/:lid/incentive", advAuth, async (req, res) => {
     try { res.json(await setIncentive(String(req.params.lid), { show_atomic: req.body?.show_atomic, click_atomic: req.body?.click_atomic }, "advertiser:" + res.locals.adv, res.locals.adv)); } catch (e) { fail(res, e); }
   });
+  // ---------- Click server (redirect, proofs, earnings, settlement) ----------
+  const clickHandler = async (req: express.Request, res: express.Response, path: string) => {
+    try {
+      const engine = await pgEngine(pool);
+      const { makeHandler } = await import(require("node:url").pathToFileURL(require("node:path").join(__dirname, "..", "..", "click-server", "src", "worker.js")).href);
+      const h = makeHandler(engine, { enqueue: (ev: any) => scoreClick(ev).catch((e: any) => console.error("click score", e?.message)) });
+      const headers = new Headers(); for (const [k, v] of Object.entries(req.headers)) if (typeof v === "string") headers.set(k, v);
+      const r: Response = await h(new Request("http://click.local" + path, { method: req.method, headers }), { clientIp: req.ip }, { waitUntil: (p: Promise<any>) => p });
+      res.status(r.status); r.headers.forEach((v, k) => res.set(k, v)); res.send(Buffer.from(await r.arrayBuffer()));
+    } catch (e) { fail(res, e); }
+  };
+  app.get("/c/:code", (req, res) => clickHandler(req, res, "/" + req.params.code));
+  app.get("/c/:code/preview", (req, res) => clickHandler(req, res, "/" + req.params.code + "/preview"));
+  app.get("/r/:token", (req, res) => clickHandler(req, res, "/r/" + req.params.token));
+  app.get("/.well-known/botsource-keys", async (_req, res) => {
+    const k = await clickKeys(); if (!k) return res.json({ keys: [] });
+    const jwk = await crypto.subtle.exportKey("jwk", k.publicKey); res.json({ keys: [{ kty: jwk.kty, crv: jwk.crv, x: jwk.x, kid: k.kid, use: "sig", alg: "EdDSA" }] });
+  });
+  // Bot proof claim. Bound to the paying wallet via an EIP-191 signed request (X-Bot-Wallet/-Signature/-Timestamp).
+  app.post("/v1/proofs", async (req: any, res) => {
+    try {
+      const engine = await pgEngine(pool);
+      const r = await engine.submitProof({ body: req.body, rawBody: req.rawBody ?? "", headers: req.headers, method: "POST", path: "/v1/proofs" });
+      res.status(r.status).json(r.body ?? { error: r.error });
+    } catch (e) { fail(res, e); }
+  });
+  // Earnings: signature REQUIRED (new endpoint, no legacy header mode).
+  app.get("/v1/bots/me/earnings", async (req: any, res) => {
+    try {
+      const engine = await pgEngine(pool);
+      const { verifySignedRequest } = await import(require("node:url").pathToFileURL(require("node:path").join(__dirname, "..", "..", "click-server", "src", "binding.js")).href);
+      const a = await verifySignedRequest({ method: "GET", path: "/v1/bots/me/earnings", headers: req.headers, body: "", cfg: { ...engine.cfg, allowUnsignedBotRequests: false }, verifyMessage: engine.verifyMessage, store: engine.store });
+      if (!a.ok) return res.status(401).json({ error: a.error });
+      res.json(await earnings(a.wallet));
+    } catch (e) { fail(res, e); }
+  });
+  app.post("/v1/admin/incentives/settle", basicAuth(), async (_req, res) => { try { res.json(await settleIncentives()); } catch (e) { fail(res, e); } });
+  app.post("/v1/admin/clicks/:id/clawback", basicAuth(), async (req, res) => {
+    try { const rows = await clawbackClick(String(req.params.id), String(req.body?.reason ?? "admin")); res.json({ clawed_back: rows.length, settlement: await settleIncentives() }); } catch (e) { fail(res, e); }
+  });
+  app.post("/v1/admin/incentives/review/:entry/clear", basicAuth(), async (req, res) => { try { res.json(await clearReview(String(req.params.entry))); } catch (e) { fail(res, e); } });
   // Prepay via x402: the advertiser pays amount_atomic test USDC to the payee; credited only AFTER on-chain settlement.
   app.post("/v1/advertisers/me/topup", banGuard(), advAuth, async (req, res) => {
     const amt = Number(req.query.amount_atomic ?? req.body?.amount_atomic);
