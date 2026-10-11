@@ -4,6 +4,7 @@ import { pool } from "./db";
 import { chainView } from "./chain";
 import { financialsRouter } from "./financials";
 import { adminRouter } from "./admin";
+import { crawlerRouter } from "./crawlerAdmin";
 /** Keyset pagination over requests: ?limit (1..500, default 100) &before=<ISO received_at> &q=<request id or query text>. */
 export function pageArgs(qs: any, startIdx = 1) {
   const limit = Math.min(Math.max(Number(qs.limit) || 100, 1), 500);
@@ -32,6 +33,7 @@ export function dashboardRouter() {
   const r = express.Router();
   r.use(financialsRouter());
   r.use(adminRouter());
+  r.use(crawlerRouter());
   r.get("/", (_q, res) => res.sendFile(join(__dirname, "..", "public", "dashboard.html")));
   r.get("/api/usage", async (req, res) => {
     const hours = Math.min(Number(req.query.hours ?? 24) || 24, 168);
@@ -94,7 +96,7 @@ export function dashboardRouter() {
             max(i.created_at) AS last_impression FROM impressions i GROUP BY 1 ORDER BY sum(i.charge_micro_usdc) DESC, 2 DESC`)));
   r.get("/api/catalogue", async (_q2, res) => res.json(await q(
     `SELECT l.seq::int, l.listing_id, l.provider_id, l.name, l.kind, l.address, l.description, l.source_url, l.cpi_micro_usdc::text AS cpi,
-            l.supersedes, EXISTS (SELECT 1 FROM listings n WHERE n.supersedes=l.listing_id) AS superseded,
+            l.supersedes, l.licence_class, l.crawl_item_id, EXISTS (SELECT 1 FROM listings n WHERE n.supersedes=l.listing_id) AS superseded,
             (SELECT count(*)::int FROM impressions i WHERE i.listing_id=l.listing_id) AS impressions
        FROM listings l ORDER BY seq`)));
   return r;

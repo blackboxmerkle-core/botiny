@@ -14,9 +14,10 @@ if (require.main === module) seed().then(n => { console.log(`seeded ${n} listing
 /** Test-only: wipe and reseed, refusing unless the connected database name ends in _test. */
 export async function resetTestDb() {
   await migrate();
+  const { migrateCrawlerSchema } = await import("./db"); await migrateCrawlerSchema();
   const db = (await pool.query("SELECT current_database() AS d")).rows[0].d as string;
   if (!db.endsWith("_test")) throw new Error(`refusing to reset non-test database ${db}`);
-  await pool.query("TRUNCATE api_log, balance_ledger, listing_bid_events, advertisers, impressions, requests, listings, settings_versions RESTART IDENTITY CASCADE");
+  await pool.query("TRUNCATE crawl_leads, crawl_probes, crawl_dedup_queue, crawl_item_sources, crawl_item_keys, crawl_items, crawl_jobs, crawl_runs, crawl_sources, crawl_hosts, api_log, balance_ledger, listing_bid_events, advertisers, impressions, requests, listings, settings_versions RESTART IDENTITY CASCADE");
   const { ensureSettings } = await import("./settings"); await ensureSettings();
   return seed();
 }

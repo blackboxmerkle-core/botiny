@@ -1,0 +1,56 @@
+import { test, before, after } from "node:test";
+import assert from "node:assert/strict";
+import type { AddressInfo } from "node:net";
+process.env.DASHBOARD_PASSWORD = "test-pass";
+const AUTH = { authorization: "Basic " + Buffer.from("admin:test-pass").toString("base64"), "content-type": "application/json" };
+import { createApp } from "../src/app";
+import { pool } from "../src/db";
+import { resetTestDb } from "../src/seed";
+import { ensureSources } from "../../crawler/src/sources";
+import { upsertItem } from "../../crawler/src/store";
+import { findNearDuplicates } from "../../crawler/src/dedupe";
+import { rescoreAll } from "../../crawler/src/score";
+let base = "", server: any;
+before(async () => { await resetTestDb(); await ensureSources(); server = createApp().listen(0); base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`; });
+after(async () => { server.close(); await pool.end(); });
+const call = async (p: string, method = "GET", body?: any) => { const r = await fetch(base + "/dashboard" + p, { method, headers: AUTH, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, body: await r.json() }; };
+const mk = (k: string, name: string) => ({ source_id: "smithery", source_key: k, source_url: "https://smithery.ai/server/" + k, licence_class: "catalogue-facts", type: "mcp" as const,
+  name, domain: "dup.test", urls: { primary: "https://dup.test/" + k }, summary: "A tool", keys: ["smithery:" + k], signals: { smithery_use_count: 2, verified: true, remote: true } });
+
+test("crawler dashboard API: auth, sources, run/pause, jobs, items, dedup, leads", async () => {
+  assert.equal((await fetch(base + "/dashboard/api/crawler/sources")).status, 401);
+  const src = await call("/api/crawler/sources");
+  assert.equal(src.status, 200);
+  assert.ok(src.body.some((s: any) => s.source_id === "x402-bazaar") && src.body.find((s: any) => s.source_id === "glama").enabled === false);
+  assert.equal((await call("/api/crawler/sources/glama/run", "POST")).status, 409);
+  const run = await call("/api/crawler/sources/npm/run", "POST");
+  assert.equal(run.body.job.kind, "sync");
+  await call("/api/crawler/sources/npm/pause", "POST");
+  assert.equal((await call("/api/crawler/jobs?status=paused")).body[0].job_id, run.body.job.job_id);
+  await call("/api/crawler/sources/npm/resume", "POST");
+  assert.equal((await call(`/api/crawler/jobs/${run.body.job.job_id}/cancel`, "POST")).body.job.status, "cancelled");
+  assert.equal((await call(`/api/crawler/jobs/${run.body.job.job_id}/retry`, "POST")).body.job.status, "queued");
+  assert.equal((await call(`/api/crawler/jobs/${run.body.job.job_id}/bogus`, "POST")).status, 404);
+  assert.equal((await call("/api/crawler/jobs", "POST", { kind: "publish" })).body.job.kind, "publish");
+  assert.equal((await call("/api/crawler/jobs", "POST", { kind: "rm -rf" })).status, 400);
+
+  const a = await upsertItem(mk("dupe-weather", "Dupe Weather"));
+  await upsertItem(mk("dupe-weather-2", "Dupe Weather Server"));
+  await findNearDuplicates(); await rescoreAll();
+  const items = await call("/api/crawler/items?q=dupe&sort=lead");
+  assert.equal(items.body.total, 2);
+  const det = await call("/api/crawler/items/" + a.item_id);
+  assert.deepEqual(det.body.keys, ["smithery:dupe-weather"]); assert.equal(det.body.sources[0].licence_class, "catalogue-facts");
+  const dd = await call("/api/crawler/dedup");
+  assert.equal(dd.body.length, 1);
+  assert.equal((await call("/api/crawler/dedup/" + dd.body[0].id, "POST", { decision: "distinct" })).body.status, "distinct");
+  assert.equal((await call("/api/crawler/dedup/" + dd.body[0].id, "POST", { decision: "merge" })).status, 409);
+  const lead = await call("/api/crawler/leads/" + a.item_id, "PUT", { stage: "qualified", notes: "good fit" });
+  assert.equal(lead.body.stage, "qualified");
+  assert.equal((await call("/api/crawler/leads/" + a.item_id, "PUT", { stage: "spam" })).status, 400);
+  const leads = await call("/api/crawler/leads?stage=qualified");
+  assert.equal(leads.body.leads[0].item_id, a.item_id);
+  const sum = await call("/api/crawler/summary");
+  assert.equal(sum.body.items, 2);
+  assert.equal((await call("/api/crawler/runs")).status, 200);
+});

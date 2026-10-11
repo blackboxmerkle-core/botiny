@@ -120,3 +120,7 @@ ALTER TABLE impressions ADD COLUMN IF NOT EXISTS bid_atomic BIGINT NOT NULL DEFA
 
 -- facilitator error reason when settlement fails
 ALTER TABLE requests ADD COLUMN IF NOT EXISTS settle_error TEXT;
+
+-- provenance for crawled listings (crawler/)
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS licence_class TEXT;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS crawl_item_id TEXT;

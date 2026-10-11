@@ -26,7 +26,8 @@ export function adminRouter() {
           COALESCE(e.bid_atomic,0)::int bid_atomic, COALESCE(e.paused,false) paused, (a.advertiser_id IS NOT NULL) has_account
         FROM listings l LEFT JOIN advertisers a ON a.advertiser_id=l.provider_id
         LEFT JOIN LATERAL (SELECT bid_atomic, paused FROM listing_bid_events x WHERE x.listing_id=l.listing_id ORDER BY seq DESC LIMIT 1) e ON true
-        WHERE NOT EXISTS (SELECT 1 FROM listings n WHERE n.supersedes=l.listing_id) ORDER BY (a.advertiser_id IS NULL), l.provider_id, l.seq`),
+        WHERE NOT EXISTS (SELECT 1 FROM listings n WHERE n.supersedes=l.listing_id) AND (l.crawl_item_id IS NULL OR a.advertiser_id IS NOT NULL)
+        ORDER BY (a.advertiser_id IS NULL), l.provider_id, l.seq`),
       bid_events: await q("SELECT seq::int, listing_id, bid_atomic::int, paused, set_by, created_at FROM listing_bid_events ORDER BY seq DESC LIMIT 30"),
     });
   });

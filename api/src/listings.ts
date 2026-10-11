@@ -5,6 +5,7 @@ import { sha256 } from "./canonical";
 export interface ListingInput {
   provider_id: string; name: string; description: string; address: string;
   kind?: string; tags?: string[]; source_url?: string | null; cpi_micro_usdc?: number; supersedes?: string | null;
+  licence_class?: string | null; crawl_item_id?: string | null;
 }
 export function validateListing(b: any): string | null {
   for (const f of ["provider_id", "name", "description", "address"]) if (typeof b?.[f] !== "string" || !b[f].trim()) return `${f} required`;
@@ -18,9 +19,9 @@ export async function insertListing(b: ListingInput, client?: { query: PoolClien
   const text = `${b.name}. ${b.description} ${(b.tags ?? []).join(" ")}`;
   const listing_id = "lst_" + sha256(`${b.provider_id}|${b.name}|${b.address}|${Date.now()}|${Math.random()}`).slice(0, 16);
   const r = await client.query(
-    `INSERT INTO listings(listing_id,supersedes,provider_id,name,description,address,kind,tags,source_url,cpi_micro_usdc,embedding_model,embedding)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING seq, listing_id`,
+    `INSERT INTO listings(listing_id,supersedes,provider_id,name,description,address,kind,tags,source_url,cpi_micro_usdc,embedding_model,embedding,licence_class,crawl_item_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING seq, listing_id`,
     [listing_id, b.supersedes ?? null, b.provider_id, b.name.trim(), b.description.trim(), b.address.trim(), b.kind ?? "service",
-     b.tags ?? [], b.source_url ?? null, b.cpi_micro_usdc ?? 0, EMBEDDING_MODEL, toPgVector(embed(text))]);
+     b.tags ?? [], b.source_url ?? null, b.cpi_micro_usdc ?? 0, EMBEDDING_MODEL, toPgVector(embed(text)), b.licence_class ?? null, b.crawl_item_id ?? null]);
   return { listing_id: r.rows[0].listing_id as string, catalogue_seq: Number(r.rows[0].seq) };
 }

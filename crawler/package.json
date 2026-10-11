@@ -1,0 +1,9 @@
+{
+  "name": "botsource-crawler",
+  "private": true,
+  "scripts": {
+    "worker": "tsx --env-file=../api/.env src/worker.ts",
+    "crawl": "tsx --env-file=../api/.env src/cli.ts",
+    "test": "DATABASE_URL=postgres://bot:bot@localhost:5432/botrec_test PAYMENT_MODE=mock tsx --test --test-concurrency=1 test/*.test.ts"
+  }
+}
