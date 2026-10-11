@@ -101,3 +101,10 @@ Dashboard "Bots · Try a search" (`POST /dashboard/api/try`) makes a real x402 c
 
 **Simulated advertisers.** `adv:sim-scout` and `adv:sim-forge` (in sim-bots.ts) top up 0.005 USDC at a time from the payer wallet when
 balance < 0.002, at most every 20 min, lifetime cap 0.05 USDC each; they random-walk bids (200–1200 atomic). Keys in logs/sim-advertisers.json (gitignored).
+
+## Dashboard history & settlement errors
+Requests, payments and bot-history lists are keyset-paginated (`?limit=1..500&before=<ISO received_at>&q=<id or query text>`;
+`X-Next-Before` / `next_before` cursor, "Load older" buttons, search box). Only the Usage tab auto-refreshes, so expanded lists keep their state.
+On-chain receipt statuses are cached permanently once final and fetched in parallel. Failed settlements store the facilitator's
+reason in `requests.settle_error` (returned as `reason` in the 402). Rows from before 11 Oct 2026 have no recorded reason.
+`npx tsx scripts/check-dashboard.ts` walks every tab via the public URL and reports JS/HTTP errors.

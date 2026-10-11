@@ -4,6 +4,15 @@ import { pool } from "./db";
 import { chainView } from "./chain";
 import { financialsRouter } from "./financials";
 import { adminRouter } from "./admin";
+/** Keyset pagination over requests: ?limit (1..500, default 100) &before=<ISO received_at> &q=<request id or query text>. */
+export function pageArgs(qs: any, startIdx = 1) {
+  const limit = Math.min(Math.max(Number(qs.limit) || 100, 1), 500);
+  const w: string[] = [], p: any[] = [];
+  if (qs.before && !isNaN(Date.parse(String(qs.before)))) { p.push(String(qs.before)); w.push(`r.received_at < $${startIdx + p.length - 1}::timestamptz`); }
+  if (qs.q) { p.push("%" + String(qs.q).slice(0, 100) + "%"); w.push(`(r.request_id ILIKE $${startIdx + p.length - 1} OR r.request_canonical ILIKE $${startIdx + p.length - 1})`); }
+  return { limit, where: w.length ? " AND " + w.join(" AND ") : "", params: p };
+}
+const nextBefore = (rows: any[], limit: number) => rows.length === limit ? new Date(rows[rows.length - 1].received_at).toISOString() : null;
 const q = async (sql: string, p: any[] = []) => (await pool.query(sql, p)).rows;
 
 export function apiLogger(): express.RequestHandler {
@@ -44,11 +53,12 @@ export function dashboardRouter() {
           max(at) AS last_at FROM api_log WHERE at > now() - $1 * interval '1 hour' GROUP BY 1 ORDER BY 2 DESC`, [hours]),
     });
   });
-  r.get("/api/payments", async (_q2, res) => {
+  r.get("/api/payments", async (req, res) => {
+    const pg = pageArgs(req.query);
     const pays = await q(`SELECT request_id, received_at, payer, payment_mode, payment_network, payment_amount_atomic::text AS amount_atomic,
-      payment_status, settle_tx FROM requests ORDER BY received_at DESC LIMIT 100`);
+      payment_status, settle_tx, settle_error, bot_id FROM requests r WHERE true${pg.where} ORDER BY received_at DESC, request_id DESC LIMIT ${pg.limit}`, pg.params);
     const totals = await q(`SELECT payment_mode, payment_status, count(*)::int AS n, sum(payment_amount_atomic)::text AS atomic FROM requests GROUP BY 1,2 ORDER BY 1,2`);
-    res.json({ payments: pays, totals });
+    res.json({ payments: pays, totals, next_before: nextBefore(pays, pg.limit), total_count: (await q(`SELECT count(*)::int n FROM requests`))[0].n });
   });
   r.get("/api/chain", async (_q2, res) => {
     const settled = await q(`SELECT request_id, settle_tx FROM requests WHERE payment_mode='x402' AND payment_status='settled'`);
@@ -61,13 +71,18 @@ export function dashboardRouter() {
     });
     res.json({ ...chain, reconciliation, unconfirmed: reconciliation.filter(r => !r.confirmed).length });
   });
-  r.get("/api/requests", async (_q2, res) => res.json(await q(
-    `SELECT r.request_id, r.received_at, r.bot_id, r.payment_status, r.payment_mode, r.response_hash,
+  r.get("/api/requests", async (req, res) => {
+    const pg = pageArgs(req.query);
+    const rows = await q(`SELECT r.request_id, r.received_at, r.bot_id, r.payment_status, r.payment_mode, r.response_hash, r.ranker_version, r.settings_version,
             (r.request_canonical::json->>'query') AS query, (SELECT count(*)::int FROM impressions i WHERE i.request_id=r.request_id) AS n
-       FROM requests r ORDER BY received_at DESC LIMIT 100`)));
+       FROM requests r WHERE true${pg.where} ORDER BY received_at DESC, request_id DESC LIMIT ${pg.limit}`, pg.params);
+    if (rows.length === pg.limit) res.set("X-Next-Before", new Date(rows[rows.length - 1].received_at).toISOString());
+    res.set("X-Total-Count", String((await q("SELECT count(*)::int n FROM requests"))[0].n));
+    res.json(rows);
+  });
   r.get("/api/requests/:id", async (req, res) => {
     const row = (await q(`SELECT request_id, received_at, catalogue_seq, embedding_model, ranker_version, request_canonical, request_hash,
-      response_canonical, response_hash, payer, payment_mode, payment_network, payment_amount_atomic::text AS amount_atomic, payment_status, settle_tx, db_txid::text, bot_id, settings_version, market_seq::text
+      response_canonical, response_hash, payer, payment_mode, payment_network, payment_amount_atomic::text AS amount_atomic, payment_status, settle_tx, settle_error, db_txid::text, bot_id, settings_version, market_seq::text
       FROM requests WHERE request_id=$1`, [req.params.id]))[0];
     if (!row) return res.status(404).json({ error: "not found" });
     const imps = await q(`SELECT i.rank, i.listing_id, i.provider_id, i.charge_micro_usdc::text AS charge, i.sponsored, i.fixed_atomic::text fixed, i.bid_atomic::text bid, i.db_txid::text, l.name

@@ -39,3 +39,41 @@ test("no dashboard response leaks the payer private key", async () => {
     assert.ok(!/PRIVATE_KEY/.test(body));
   }
 });
+
+test("older entries stay reachable: pagination, search, legacy rows, settle_failed reason recorded", async () => {
+  // 7 requests; page through 3 at a time
+  const ids: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    const r = await (await fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json", "X-PAYMENT": `mock:pg${i}${Date.now()}` }, body: JSON.stringify({ query: "page test " + i, k: 2 }) })).json();
+    ids.push(r.request_id); await new Promise(r => setTimeout(r, 5));
+  }
+  const seen: string[] = []; let before: string | null = null;
+  for (let guard = 0; guard < 50; guard++) {
+    const r = await fetch(base + "/dashboard/api/requests?limit=3" + (before ? "&before=" + encodeURIComponent(before) : ""), { headers: AUTH });
+    assert.equal(r.status, 200);
+    seen.push(...(await r.json()).map((x: any) => x.request_id));
+    before = r.headers.get("X-Next-Before"); if (!before) break;
+  }
+  const total = (await pool.query("SELECT count(*)::int n FROM requests")).rows[0].n;
+  assert.equal(new Set(seen).size, total, "every request reachable via pagination");
+  for (const id of ids) assert.ok(seen.includes(id));
+  const s = await (await fetch(base + "/dashboard/api/requests?q=page%20test%203", { headers: AUTH })).json();
+  assert.equal(s.length, 1); assert.equal(s[0].request_id, ids[3]);
+  const p = await (await fetch(base + "/dashboard/api/payments?limit=2", { headers: AUTH })).json();
+  assert.equal(p.payments.length, 2); assert.ok(p.next_before); assert.equal(p.total_count, total);
+  // a legacy v1 row (no settings_version/market_seq) still loads and replays
+  const legacy = (await pool.query("SELECT request_id FROM requests WHERE settings_version IS NULL LIMIT 1")).rows[0];
+  if (legacy) {
+    assert.equal((await fetch(base + "/dashboard/api/requests/" + legacy.request_id, { headers: AUTH })).status, 200);
+    assert.equal((await (await fetch(base + "/v1/requests/" + legacy.request_id + "/replay")).json()).match, true);
+  }
+  // settlement failure reason is stored and returned
+  process.env.MOCK_SETTLE_FAIL = "1";
+  const f = await fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json", "X-PAYMENT": "mock:sf" + Date.now() }, body: JSON.stringify({ query: "settle fail", k: 1 }) });
+  delete process.env.MOCK_SETTLE_FAIL;
+  const fj = await f.json();
+  assert.equal(f.status, 402); assert.equal(fj.reason, "mock_settle_failure");
+  const d = await (await fetch(base + "/dashboard/api/requests/" + fj.request_id, { headers: AUTH })).json();
+  assert.equal(d.payment_status, "settle_failed"); assert.equal(d.settle_error, "mock_settle_failure");
+  assert.equal((await (await fetch(base + "/v1/requests/" + fj.request_id + "/replay")).json()).match, true);
+});

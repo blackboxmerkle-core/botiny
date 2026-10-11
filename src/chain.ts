@@ -5,8 +5,11 @@ export const PAYEE = (process.env.PAY_TO_ADDRESS || "0x0e66433540a91D9683E939c8A
 export const PAYER = (process.env.PAYER_ADDRESS || "0x0b68c3ecBB5DC0E79a4399eE7eA43d07Cb9A5402") as `0x${string}`; // public address only
 const client = createPublicClient({ chain: baseSepolia, transport: http(process.env.BASE_SEPOLIA_RPC ?? "https://sepolia.base.org") });
 let cache: { at: number; data: any } | null = null;
+// Final receipt statuses never change: cache forever. 'not_found' is retried.
+const receiptCache = new Map<string, string>();
 export async function chainView(txs: string[]) {
-  if (cache && Date.now() - cache.at < 30000 && txs.every(t => t in cache!.data.receipts)) return cache.data;
+  const fresh = cache && Date.now() - cache.at < 30000;
+  if (fresh) { await fillReceipts(txs); return { ...cache!.data, receipts: Object.fromEntries(receiptCache) }; }
   const bal = (a: `0x${string}`) => client.readContract({ address: USDC_BASE_SEPOLIA as `0x${string}`, abi: erc20Abi, functionName: "balanceOf", args: [a] });
   const out: any = { network: "base-sepolia", chain_id: 84532, usdc: USDC_BASE_SEPOLIA, payee: PAYEE, payer: PAYER, receipts: {}, transfers: [], errors: [] };
   try {
@@ -23,10 +26,17 @@ export async function chainView(txs: string[]) {
     out.transfer_window_blocks = Number(WINDOW);
     out.transfers = logs.slice(-25).reverse().map(l => ({ tx: l.transactionHash, block: Number(l.blockNumber), from: l.args.from, value: formatUnits(l.args.value!, 6) }));
   } catch (e: any) { out.errors.push(String(e.shortMessage ?? e.message)); }
-  for (const t of txs.filter(t => /^0x[0-9a-fA-F]{64}$/.test(t))) {
-    try { const r = await client.getTransactionReceipt({ hash: t as `0x${string}` }); out.receipts[t] = r.status; }
-    catch { out.receipts[t] = "not_found"; }
-  }
+  await fillReceipts(txs);
+  out.receipts = Object.fromEntries(receiptCache);
   cache = { at: Date.now(), data: out };
   return out;
+}
+
+async function fillReceipts(txs: string[]) {
+  const todo = [...new Set(txs.filter(t => /^0x[0-9a-fA-F]{64}$/.test(t) && (receiptCache.get(t) ?? "not_found") === "not_found"))];
+  for (let i = 0; i < todo.length; i += 8) {
+    await Promise.all(todo.slice(i, i + 8).map(async t => {
+      try { receiptCache.set(t, (await client.getTransactionReceipt({ hash: t as `0x${string}` })).status); } catch { receiptCache.set(t, "not_found"); }
+    }));
+  }
 }

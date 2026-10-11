@@ -79,11 +79,12 @@ export function createApp() {
       return res.status(500).json({ error: "internal error", detail: String(e?.message ?? e) });
     } finally { client.release(); }
 
-    const s = await settlePayment(pay).catch(() => ({ ok: false } as any));
-    await pool.query("UPDATE requests SET payment_status=$2, settle_tx=$3 WHERE request_id=$1",
-      [request_id, s.ok ? "settled" : "settle_failed", s.tx ?? null]);
+    const s = await settlePayment(pay).catch((e: any) => ({ ok: false, error: "exception: " + String(e?.shortMessage ?? e?.message ?? e).slice(0, 480) } as any));
+    await pool.query("UPDATE requests SET payment_status=$2, settle_tx=$3, settle_error=$4 WHERE request_id=$1",
+      [request_id, s.ok ? "settled" : "settle_failed", s.tx ?? null, s.ok ? null : (s.error ?? "unknown")]);
+    if (!s.ok) res.locals.error = "settlement failed: " + (s.error ?? "unknown");
     if (s.header) res.set("X-PAYMENT-RESPONSE", s.header);
-    if (!s.ok) return res.status(402).json({ error: "settlement failed", request_id });
+    if (!s.ok) return res.status(402).json({ error: "settlement failed", reason: s.error ?? "unknown", request_id });
     res.json({ request_id, response_hash: out.hash, response: out.body });
   });
 
@@ -102,7 +103,7 @@ export function createApp() {
 
   app.get("/v1/requests/:id", async (req, res) => {
     const r = (await pool.query(`SELECT request_id,received_at,catalogue_seq,market_seq,settings_version,embedding_model,ranker_version,request_canonical,request_hash,
-      response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_status,settle_tx,db_txid,bot_id FROM requests WHERE request_id=$1`, [req.params.id])).rows[0];
+      response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_status,settle_tx,settle_error,db_txid,bot_id FROM requests WHERE request_id=$1`, [req.params.id])).rows[0];
     if (!r) return res.status(404).json({ error: "not found" });
     const imp = (await pool.query("SELECT rank,listing_id,provider_id,sponsored,fixed_atomic,bid_atomic,charge_micro_usdc FROM impressions WHERE request_id=$1 ORDER BY rank", [req.params.id])).rows;
     res.json({ ...r, impressions: imp });
@@ -135,8 +136,8 @@ export function createApp() {
     if ("error" in pay) { res.locals.error = pay.error; return res.status(402).json({ x402Version: 1, error: pay.error, accepts: [requirements(resource, BigInt(amt), desc)] }); }
     const dup = (await pool.query("SELECT 1 FROM balance_ledger WHERE payment_ref=$1", [pay.ref])).rows.length;
     if (dup) return res.status(409).json({ error: "payment already used" });
-    const s = await settlePayment(pay).catch(() => ({ ok: false } as any));
-    if (!s.ok) { res.locals.error = "settlement failed"; return res.status(402).json({ error: "settlement failed; balance not credited" }); }
+    const s = await settlePayment(pay).catch((e: any) => ({ ok: false, error: "exception: " + String(e?.message ?? e).slice(0, 480) } as any));
+    if (!s.ok) { res.locals.error = "settlement failed: " + (s.error ?? "unknown"); return res.status(402).json({ error: "settlement failed; balance not credited", reason: s.error ?? "unknown" }); }
     if (s.header) res.set("X-PAYMENT-RESPONSE", s.header);
     try {
       const c = await credit(res.locals.adv, amt, "topup_x402", { settle_tx: s.tx, payment_ref: pay.ref, payer: pay.payer, note: pay.mode });

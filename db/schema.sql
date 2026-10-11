@@ -117,3 +117,6 @@ ALTER TABLE requests ADD COLUMN IF NOT EXISTS market_seq BIGINT;
 ALTER TABLE impressions ADD COLUMN IF NOT EXISTS sponsored BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE impressions ADD COLUMN IF NOT EXISTS fixed_atomic BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE impressions ADD COLUMN IF NOT EXISTS bid_atomic BIGINT NOT NULL DEFAULT 0;
+
+-- facilitator error reason when settlement fails
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS settle_error TEXT;

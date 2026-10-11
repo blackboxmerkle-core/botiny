@@ -78,11 +78,13 @@ export function adminRouter() {
       res.status(r2.status === 200 ? 200 : 502).json({ status: r2.status, bot_id: bot, ...body, payment: row });
     } catch (e: any) { res.status(502).json({ error: String(e?.shortMessage ?? e?.message ?? e).slice(0, 300) }); }
   });
-  r.get("/api/bots/:bot/history", async (req, res) => res.json(await q(
-    `SELECT r.request_id, r.received_at, r.request_canonical::json->>'query' AS query, r.payment_status, r.settle_tx, r.response_hash,
+  r.get("/api/bots/:bot/history", async (req, res) => { const { pageArgs } = await import("./dashboard"); const pg = pageArgs(req.query, 2); pg.limit = Math.min(pg.limit, Number(req.query.limit) || 25); const rows = await q(
+    `SELECT r.request_id, r.received_at, r.request_canonical::json->>'query' AS query, r.payment_status, r.settle_tx, r.settle_error, r.response_hash,
             r.payment_amount_atomic::text amount_atomic, r.settings_version,
             (SELECT json_agg(json_build_object('rank',x->'rank','name',x->'name','sponsored',COALESCE((x->>'sponsored')::bool,false)) ORDER BY (x->>'rank')::int)
                FROM json_array_elements(r.response_canonical::json->'results') x) AS results
-       FROM requests r WHERE r.bot_id=$1 ORDER BY r.received_at DESC LIMIT 25`, [req.params.bot])));
+       FROM requests r WHERE r.bot_id=$1${pg.where} ORDER BY r.received_at DESC, r.request_id DESC LIMIT ${pg.limit}`, [req.params.bot, ...pg.params]);
+    if (rows.length === pg.limit) res.set("X-Next-Before", new Date(rows[rows.length - 1].received_at).toISOString());
+    res.json(rows); });
   return r;
 }

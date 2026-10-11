@@ -42,9 +42,10 @@ export async function verifyPayment(header: string | undefined, resource: string
   if (!v.isValid) return { error: "payment invalid: " + v.invalidReason };
   return { mode: "x402", payer: v.payer ?? "unknown", ref, amount, payload, reqs };
 }
-export async function settlePayment(p: Verified): Promise<{ ok: boolean; tx?: string; header?: string }> {
-  if (p.mode === "mock") return { ok: true, tx: "mock" };
+export async function settlePayment(p: Verified): Promise<{ ok: boolean; tx?: string; header?: string; error?: string }> {
+  if (p.mode === "mock") return process.env.MOCK_SETTLE_FAIL === "1" ? { ok: false, error: "mock_settle_failure" } : { ok: true, tx: "mock" };
   const { useFacilitator } = await import("x402/verify");
   const s = await useFacilitator({ url: FACILITATOR as `${string}://${string}` }).settle(p.payload, p.reqs);
-  return { ok: s.success, tx: s.transaction, header: Buffer.from(JSON.stringify(s)).toString("base64") };
+  return { ok: s.success, tx: s.transaction || undefined, header: Buffer.from(JSON.stringify(s)).toString("base64"),
+    error: s.success ? undefined : String((s as any).errorReason ?? (s as any).error ?? "unknown").slice(0, 500) };
 }
