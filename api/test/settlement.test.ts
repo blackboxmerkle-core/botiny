@@ -35,7 +35,7 @@ const BROWSER = { "user-agent": "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chro
 let ipn = 1;
 const clickLink = async (short_url: string) => {
   const code = short_url.split("/").pop();
-  const r = await fetch(`${base}/c/${code}`, { redirect: "manual", headers: { ...BROWSER, "cf-connecting-ip": `81.20.${ipn++}.9` } });
+  const r = await fetch(`${base}/c/${code}`, { redirect: "manual", headers: { ...BROWSER, "x-forwarded-for": `81.20.${ipn++}.9` } });
   assert.equal(r.status, 302);
   const click_id = new URL(r.headers.get("location")!).searchParams.get("bs_click");
   for (let i = 0; i < 100; i++) { const row = (await pool.query("SELECT * FROM clicks WHERE click_id=$1", [click_id])).rows[0]; if (row) return row; await new Promise(r => setTimeout(r, 20)); }

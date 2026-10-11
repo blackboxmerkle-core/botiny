@@ -10,7 +10,7 @@ import { basicAuth } from "./auth";
 import { verifyPayment, settlePayment, accepts, reserveNonce, peekNonce, MODE, PAY_TO } from "./payment";
 import { tosInfo, checkTos, currentTos, tosVersion, TosKind } from "./tos";
 import { publicChains } from "./chains";
-import { banGuard } from "./bans";
+import { banGuard, clientIp } from "./bans";
 import { payToState } from "./wallets";
 import { activeChains, relayerAddress } from "./relayer";
 import { currentSettings } from "./settings";
@@ -93,7 +93,7 @@ export function createApp() {
       }
       // click-server: signed per-result links + incentive escrow, same transaction; kept out of response_hash
       const cl = await issueClickLinks(client, { request_id, bot_wallet: pay.payer, channel: req.get("X-Bot-Channel"),
-        client_req: { ip: req.ip, ua: req.get("user-agent") ?? "", acceptLanguage: req.get("accept-language") ?? "" },
+        client_req: { ip: clientIp(req), ua: req.get("user-agent") ?? "", acceptLanguage: req.get("accept-language") ?? "" },
         market_seq: mseq, settings: out.settings ?? settings, results: out.body.results, providers: out.meta.map((m: any) => m.provider_id) });
       click_links = cl.click_links;
       debited.push(...cl.debited);
@@ -164,14 +164,17 @@ export function createApp() {
       const engine = await pgEngine(pool);
       const { makeHandler } = await import(require("node:url").pathToFileURL(require("node:path").join(__dirname, "..", "..", "click-server", "src", "worker.js")).href);
       const h = makeHandler(engine, { enqueue: (ev: any) => scoreClick(ev).catch((e: any) => console.error("click score", e?.message)) });
-      const headers = new Headers(); for (const [k, v] of Object.entries(req.headers)) if (typeof v === "string") headers.set(k, v);
-      const r: Response = await h(new Request("http://click.local" + path, { method: req.method, headers }), { clientIp: req.ip }, { waitUntil: (p: Promise<any>) => p });
+      const trustCf = process.env.TRUST_CF_HEADER === "1";
+      const headers = new Headers(); for (const [k, v] of Object.entries(req.headers)) if (typeof v === "string" && (trustCf || k !== "cf-connecting-ip")) headers.set(k, v);
+      // client IP: same rule as bans (first X-Forwarded-For hop from ngrok, else socket); cf-connecting-ip only if TRUST_CF_HEADER=1
+      const r: Response = await h(new Request("http://click.local" + path, { method: req.method, headers }), { clientIp: clientIp(req), trustCf }, { waitUntil: (p: Promise<any>) => p });
       res.status(r.status); r.headers.forEach((v, k) => res.set(k, v)); res.send(Buffer.from(await r.arrayBuffer()));
     } catch (e) { fail(res, e); }
   };
   app.get("/c/:code", (req, res) => clickHandler(req, res, "/" + req.params.code));
   app.get("/c/:code/preview", (req, res) => clickHandler(req, res, "/" + req.params.code + "/preview"));
   app.get("/r/:token", (req, res) => clickHandler(req, res, "/r/" + req.params.token));
+  app.get("/c/r/:token", (req, res) => clickHandler(req, res, "/r/" + req.params.token));   // track_url = CLICK_SHORT_BASE + /r/<token>
   app.get("/.well-known/botsource-keys", async (_req, res) => {
     const k = await clickKeys(); if (!k) return res.json({ keys: [] });
     const jwk = await crypto.subtle.exportKey("jwk", k.publicKey); res.json({ keys: [{ kty: jwk.kty, crv: jwk.crv, x: jwk.x, kid: k.kid, use: "sig", alg: "EdDSA" }] });

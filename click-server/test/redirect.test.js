@@ -16,13 +16,20 @@ test('GET /:code -> 302 to stored dest, async enqueue, no cookies', async () => 
   const { h, queued, set } = await env();
   const r0 = set.results[0]; const code = r0.short_url.split('/').pop();
   assert.match(code, /^[0-9A-Za-z]{12}$/);
-  const res = await h(new Request(`https://bsrc.test/${code}`, { headers: { 'user-agent': 'Mozilla/5.0', 'cf-connecting-ip': '81.2.3.4' } }), {}, ctx);
+  const res = await h(new Request(`https://bsrc.test/${code}`, { headers: { 'user-agent': 'Mozilla/5.0', 'cf-connecting-ip': '81.2.3.4' } }), { trustCf: true }, ctx);
   assert.equal(res.status, 302);
   const loc = new URL(res.headers.get('location'));
   assert.equal(loc.origin + loc.pathname, 'https://p0.example/l0'); assert.match(loc.searchParams.get('bs_click'), /^ck_/);
   assert.equal(res.headers.get('set-cookie'), null); assert.equal(res.headers.get('cache-control'), 'no-store');
   await Promise.all(waits);
   assert.equal(queued.length, 1); assert.equal(queued[0].token, r0.harvest_token); assert.equal(queued[0].ip, '81.2.3.4');
+});
+test('cf-connecting-ip ignored unless trustCf; falls back to env.clientIp', async () => {
+  const { h, queued, set } = await env();
+  const code = set.results[0].short_url.split('/').pop();
+  await h(new Request(`https://bsrc.test/${code}`, { headers: { 'cf-connecting-ip': '6.6.6.6' } }), { clientIp: '81.2.3.9' }, ctx);
+  await Promise.all(waits);
+  assert.equal(queued.at(-1).ip, '81.2.3.9');
 });
 test('GET /r/:token works; tampered/unknown -> 404, no open redirect', async () => {
   const { h, set } = await env();

@@ -28,8 +28,9 @@ export function makeHandler(engine, { enqueue, jwks = [] }) {
     if (preview) return new Response(`<!doctype html><meta property="og:url" content="${esc(dest)}"><meta property="og:title" content="Incentivised listing"><title>Incentivised listing</title><a href="${esc(dest)}">${esc(dest)}</a> <a href="/privacy">Privacy</a>`, { headers: { ...SEC, 'content-type': 'text/html; charset=utf-8' } });
     const click_id = `ck_${base62Code(16)}`;
     const h = Object.fromEntries(request.headers);
+    // cf-connecting-ip is trusted only when deployed behind Cloudflare (env.trustCf / TRUST_CF_HEADER=1)
     const ev = { click_id, token: hit.token, ts: Date.now(), method: request.method,
-      ip: h['cf-connecting-ip'] ?? env.clientIp ?? null, ua: h['user-agent'] ?? '', headers: h,
+      ip: (env.trustCf ? h['cf-connecting-ip'] : null) ?? env.clientIp ?? null, ua: h['user-agent'] ?? '', headers: h,
       cfBotScore: request.cf?.botManagement?.score };
     ctx.waitUntil(Promise.resolve().then(() => enqueue(ev)).catch(() => {}));
     const loc = new URL(dest); loc.searchParams.set('bs_click', click_id);
