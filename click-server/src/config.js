@@ -38,6 +38,11 @@ export const DEFAULTS = Object.freeze({
   rawIpRetentionMs: 86_400_000,
   datacenterCidrs: [],         // fill from a cloud ASN list at deploy time
   shortCodeLength: 12,
+  // settlement
+  settleGraceMs: 3_600_000,    // wait after a line's last chance to accrue before refunding its escrow
+  // bot-side request binding
+  sigMaxSkewMs: 300_000,
+  allowUnsignedBotRequests: true, // legacy X-Bot-Wallet-only binding; such proofs are marked binding='header'
 });
 
 /** Build config from defaults + overrides + optional env (CS_FEE=low|standard|<atomic>). */
@@ -47,6 +52,7 @@ export function makeConfig(overrides = {}, env = {}) {
   for (const [k, v] of Object.entries(env)) {
     const m = /^CS_CFG_(.+)$/.exec(k);
     if (m && m[1] in c && typeof c[m[1]] === 'number') c[m[1]] = Number(v);
+    if (m && m[1] in c && typeof c[m[1]] === 'boolean') c[m[1]] = v === '1' || v === 'true';
   }
   Object.assign(c, overrides);
   if (!Number.isInteger(c.feeAtomic) || c.feeAtomic <= 0) throw new Error('feeAtomic must be a positive integer');

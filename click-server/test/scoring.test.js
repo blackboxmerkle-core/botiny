@@ -34,7 +34,7 @@ test('self-click: key seen on bot API calls or provider cluster', async () => {
   await engine.noteBotApiCall('0xbot', { ip: '90.1.1.1', ua: BROWSER.ua, acceptLanguage: 'en-GB' }, T0);
   const c = await click(engine, s.results[0].harvest_token, { ip: '90.1.1.200' });  // same /24
   assert.equal(c.class, 'self'); assert.equal(store.strikes.length, 1);
-  store.linkClusterWallet('C1', '0xprov'); await engine.noteBotApiCall('0xprov', { ip: '91.1.1.1', ua: BROWSER.ua, acceptLanguage: 'en-GB' }, T0);
+  await store.linkClusterWallet('C1', '0xprov'); await engine.noteBotApiCall('0xprov', { ip: '91.1.1.1', ua: BROWSER.ua, acceptLanguage: 'en-GB' }, T0);
   assert.equal((await click(engine, s.results[1].harvest_token, { ip: '91.1.1.9' })).class, 'self');
 });
 test('dedupe: 1 per (user, listing) per 24h across tokens', async () => {
@@ -62,7 +62,7 @@ test('max 2 paid clicks per set', async () => {
 test('raw IP purged after retention', async () => {
   const { engine, store } = await setup(); const s = await issue(engine);
   await click(engine, s.results[0].harvest_token);
-  engine.purgeRawIps(T0 + 2 * 86_400_000); assert.equal(store.clicks[0].raw_ip, null); assert.ok(store.clicks[0].ip_trunc.endsWith('/24'));
+  await engine.purgeRawIps(T0 + 2 * 86_400_000); assert.equal(store.clicks[0].raw_ip, null); assert.ok(store.clicks[0].ip_trunc.endsWith('/24'));
 });
 test('cookie-free key: no device storage, daily-rotated salted hash', async () => {
   const { engine, store } = await setup(); const s = await issue(engine); const ip = freshIp();

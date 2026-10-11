@@ -12,8 +12,8 @@ export function makeHandler(engine, { enqueue, jwks = [] }) {
     if (p === '/' ) return new Response('Bot Source short links. Privacy: no cookies, no JS; truncated, salted-hash request data used for fraud prevention. See /privacy.', { headers: SEC });
     if (p === '/.well-known/botsource-keys') return json(200, { keys: jwks });
     if (p === '/v1/proofs' && request.method === 'POST') {
-      let body; try { body = await request.json(); } catch { return json(400, { error: 'bad_json' }); }
-      const r = await engine.submitProof({ ...body, caller_wallet: request.headers.get('x-bot-wallet') });
+      let body, rawBody; try { rawBody = await request.text(); body = JSON.parse(rawBody); } catch { return json(400, { error: 'bad_json' }); }
+      const r = await engine.submitProof({ body, rawBody, headers: Object.fromEntries(request.headers) });
       return json(r.status, r.body ?? { error: r.error });
     }
     if (request.method !== 'GET' && request.method !== 'HEAD') return json(405, { error: 'method' });
@@ -28,8 +28,9 @@ export function makeHandler(engine, { enqueue, jwks = [] }) {
     if (preview) return new Response(`<!doctype html><meta property="og:url" content="${esc(dest)}"><meta property="og:title" content="Incentivised listing"><title>Incentivised listing</title><a href="${esc(dest)}">${esc(dest)}</a> <a href="/privacy">Privacy</a>`, { headers: { ...SEC, 'content-type': 'text/html; charset=utf-8' } });
     const click_id = `ck_${base62Code(16)}`;
     const h = Object.fromEntries(request.headers);
+    // cf-connecting-ip is trusted only when deployed behind Cloudflare (env.trustCf / TRUST_CF_HEADER=1)
     const ev = { click_id, token: hit.token, ts: Date.now(), method: request.method,
-      ip: h['cf-connecting-ip'] ?? env.clientIp ?? null, ua: h['user-agent'] ?? '', headers: h,
+      ip: (env.trustCf ? h['cf-connecting-ip'] : null) ?? env.clientIp ?? null, ua: h['user-agent'] ?? '', headers: h,
       cfBotScore: request.cf?.botManagement?.score };
     ctx.waitUntil(Promise.resolve().then(() => enqueue(ev)).catch(() => {}));
     const loc = new URL(dest); loc.searchParams.set('bs_click', click_id);
