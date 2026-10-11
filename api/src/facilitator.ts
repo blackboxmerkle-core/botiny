@@ -74,9 +74,9 @@ export function decodeExactPayload(header: string): ExactPayload | null {
 
 export type VerifyResult = { ok: true; payer: string } | { ok: false; reason: string };
 /** Local verification. Order: static checks -> signature -> DB nonce -> on-chain nonce -> balance. */
-export async function verifyExact(p: ExactPayload, c: EvmChain, req: { amount: bigint; payTo: string }, opts: { rpc?: ChainRpc; nonceUsedInDb?: (chainId: number, from: string, nonce: string) => Promise<boolean>; now?: number } = {}): Promise<VerifyResult> {
+export async function verifyExact(p: ExactPayload, c: EvmChain, req: { amount: bigint; payTo: string | string[] }, opts: { rpc?: ChainRpc; nonceUsedInDb?: (chainId: number, from: string, nonce: string) => Promise<boolean>; now?: number } = {}): Promise<VerifyResult> {
   const a = p.payload.authorization, now = opts.now ?? Math.floor(Date.now() / 1000);
-  if (getAddress(a.to) !== getAddress(req.payTo)) return { ok: false, reason: "invalid_payto: authorization.to does not match payTo" };
+  if (!(Array.isArray(req.payTo) ? req.payTo : [req.payTo]).some(x => getAddress(x) === getAddress(a.to))) return { ok: false, reason: "invalid_payto: authorization.to does not match payTo" };
   if (BigInt(a.value) < req.amount) return { ok: false, reason: `insufficient_amount: ${a.value} < ${req.amount}` };
   if (BigInt(a.validAfter) > BigInt(now)) return { ok: false, reason: "not_yet_valid: validAfter in the future" };
   if (BigInt(a.validBefore) <= BigInt(now + 6)) return { ok: false, reason: "expired: validBefore passed (or < 6s left to settle)" };

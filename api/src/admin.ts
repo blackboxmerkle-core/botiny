@@ -3,6 +3,8 @@ import { pool } from "./db";
 import { currentSettings, saveSettings } from "./settings";
 import { createAdvertiser, credit, setBid } from "./market";
 import { MODE } from "./payment";
+import { audit, actorOf, payToState, setPayTo, rotateRelayer, GRACE_SEC } from "./wallets";
+import { addBan, revokeBan } from "./bans";
 const q = async (sql: string, p: any[] = []) => (await pool.query(sql, p)).rows;
 const fail = (res: express.Response, e: any) => res.status(e?.status ?? (e?.code === "23505" ? 409 : 500)).json({ error: String(e?.message ?? e) });
 export const SIM_BOTS = ["research-bot", "dev-bot"];
@@ -32,7 +34,7 @@ export function adminRouter() {
     });
   });
   r.post("/api/admin/settings", async (req, res) => {
-    try { res.json(await saveSettings(req.body?.settings ?? {}, req.body?.note ?? null)); } catch (e) { fail(res, e); }
+    try { const r = await saveSettings(req.body?.settings ?? {}, req.body?.note ?? null); await audit(actorOf(req.headers.authorization), "settings_save", { version: (r as any).version, note: req.body?.note ?? null }); res.json(r); } catch (e) { fail(res, e); }
   });
   r.post("/api/admin/advertisers", async (req, res) => {
     try { res.status(201).json(await createAdvertiser(String(req.body?.advertiser_id ?? ""), String(req.body?.name ?? ""))); } catch (e) { fail(res, e); }
@@ -40,7 +42,8 @@ export function adminRouter() {
   r.post("/api/admin/advertisers/:id/credit", async (req, res) => {
     try {
       const ok = (await q("SELECT 1 FROM advertisers WHERE advertiser_id=$1", [req.params.id])).length; if (!ok) return res.status(404).json({ error: "no such advertiser" });
-      res.json(await credit(req.params.id, Number(req.body?.amount_atomic), "admin_credit", { note: req.body?.note ?? "manual test credit (no funds moved)" }));
+      const c = await credit(req.params.id, Number(req.body?.amount_atomic), "admin_credit", { note: req.body?.note ?? "manual test credit (no funds moved)" });
+      await audit(actorOf(req.headers.authorization), "advertiser_credit", { advertiser_id: req.params.id, amount_atomic: Number(req.body?.amount_atomic) }); res.json(c);
     } catch (e) { fail(res, e); }
   });
   r.post("/api/admin/listings/:lid", async (req, res) => {
@@ -80,6 +83,31 @@ export function adminRouter() {
        FROM requests r WHERE r.bot_id=$1${pg.where} ORDER BY r.received_at DESC, r.request_id DESC LIMIT ${pg.limit}`, [req.params.bot, ...pg.params]);
     if (rows.length === pg.limit) res.set("X-Next-Before", new Date(rows[rows.length - 1].received_at).toISOString());
     res.json(rows); });
+  // ---------- Wallets (public addresses only; keys never leave the server) ----------
+  r.get("/api/admin/wallets", async (_q2, res) => {
+    const { relayerAddress, gasStatus, fallbackOn } = await import("./relayer");
+    const { PAYER } = await import("./chain");
+    res.json({ pay_to: await payToState(), grace_sec: GRACE_SEC, history: await q("SELECT version, pay_to, changed_by, note, created_at FROM wallet_settings ORDER BY version DESC LIMIT 50"),
+      relayer: { address: relayerAddress(), fallback_enabled: fallbackOn(), gas: MODE === "mock" ? [] : await gasStatus().catch(() => []) },
+      payer: { address: PAYER, used_by: SIM_BOTS, note: "simulator/test payer; key held only in the sim process environment" } });
+  });
+  r.post("/api/admin/wallets/payto", async (req, res) => {
+    try { res.json(await setPayTo(String(req.body?.address ?? ""), String(req.body?.confirm ?? ""), actorOf(req.headers.authorization), req.body?.note ?? null)); } catch (e) { fail(res, e); }
+  });
+  r.post("/api/admin/relayer/rotate", async (req, res) => {
+    try { res.json(await rotateRelayer({ generate: !!req.body?.generate, private_key: req.body?.private_key, confirm: req.body?.confirm }, actorOf(req.headers.authorization))); } catch (e) { fail(res, e); }
+  });
+  // ---------- Bans ----------
+  r.get("/api/admin/bans", async (_q2, res) => res.json({
+    bans: await q(`SELECT *, (revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())) AS active FROM bans ORDER BY active DESC, ban_id DESC LIMIT 200`),
+    events: await q("SELECT e.*, b.kind, b.value FROM ban_events e JOIN bans b USING (ban_id) ORDER BY e.id DESC LIMIT 100"),
+    blocked_24h: (await q("SELECT count(*)::int n FROM ban_events WHERE event='blocked' AND at > now() - interval '24 hours'"))[0].n,
+    note: "X-Bot-Id is self-declared (weak); wallet and IP/CIDR bans are the strong ones." }));
+  r.post("/api/admin/bans", async (req, res) => {
+    try { res.status(201).json(await addBan({ kind: req.body?.kind, value: req.body?.value, reason: req.body?.reason, expires_at: req.body?.expires_at || null }, actorOf(req.headers.authorization))); } catch (e) { fail(res, e); }
+  });
+  r.post("/api/admin/bans/:id/revoke", async (req, res) => { try { res.json(await revokeBan(Number(req.params.id), actorOf(req.headers.authorization))); } catch (e) { fail(res, e); } });
+  r.get("/api/admin/audit", async (_q2, res) => res.json(await q("SELECT * FROM admin_audit ORDER BY id DESC LIMIT 300")));
   // ---------- Terms of Service (DRAFT placeholder; each save = new version) ----------
   r.get("/api/admin/tos", async (_q2, res) => {
     const { currentTos, tosHistory } = await import("./tos");
@@ -88,7 +116,7 @@ export function adminRouter() {
   r.post("/api/admin/tos", async (req, res) => {
     const { saveTos } = await import("./tos");
     const kind = req.body?.kind; if (kind !== "bot" && kind !== "advertiser") return res.status(400).json({ error: "kind must be bot|advertiser" });
-    try { res.json(await saveTos(kind, String(req.body?.body ?? ""), req.body?.note ?? null)); } catch (e) { fail(res, e); }
+    try { const t = await saveTos(kind, String(req.body?.body ?? ""), req.body?.note ?? null); await audit(actorOf(req.headers.authorization), "tos_save", { kind, version: t.version, sha256: t.sha256 }); res.json(t); } catch (e) { fail(res, e); }
   });
   return r;
 }

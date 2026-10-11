@@ -10,6 +10,8 @@ import { basicAuth } from "./auth";
 import { verifyPayment, settlePayment, accepts, reserveNonce, peekNonce, MODE, PAY_TO } from "./payment";
 import { tosInfo, checkTos, currentTos, tosVersion, TosKind } from "./tos";
 import { publicChains } from "./chains";
+import { banGuard } from "./bans";
+import { payToState } from "./wallets";
 import { activeChains, relayerAddress } from "./relayer";
 import { currentSettings } from "./settings";
 import { MARKET_LOCK, marketSeq, assertNonNegative, advertiserByKey, advertiserSummary, setBid, credit } from "./market";
@@ -27,7 +29,7 @@ export function createApp() {
   app.get("/v1/health", async (_q, r) => {
     const act = MODE === "mock" ? [] : await activeChains().catch(() => []);
     r.json({ ok: true, payment_mode: MODE, network: MODE === "mock" ? "mock" : act.map(a => a.chain.key).join(",") || "none", settlement: MODE === "mock" ? "mock" : "own-facilitator",
-      chains: act.map(a => ({ network: a.chain.key, caip2: a.chain.caip2, settle_via: a.settle_via })), pay_to: PAY_TO, relayer: relayerAddress() });
+      chains: act.map(a => ({ network: a.chain.key, caip2: a.chain.caip2, settle_via: a.settle_via })), pay_to: (await payToState()).pay_to, relayer: relayerAddress() });
   });
   app.get("/v1/chains", async (_q, r) => r.json({ chains: publicChains(), active: MODE === "mock" ? [] : (await activeChains()).map(a => ({ network: a.chain.key, settle_via: a.settle_via })) }));
   // Versioned Terms of Service (DRAFT placeholder). /v1/terms/:version = bot ToS; /v1/terms/advertiser/:version
@@ -45,7 +47,7 @@ export function createApp() {
     res.status(201).json(await insertListing(req.body));
   });
 
-  app.post("/v1/recommend", async (req, res) => {
+  app.post("/v1/recommend", banGuard(), async (req, res) => {
     const inp = normalizeInput(req.body);
     if (typeof inp === "string") return res.status(400).json({ error: inp });
     const { version: settings_version, settings } = await currentSettings();   // price + ranking rules pinned here
@@ -70,11 +72,11 @@ export function createApp() {
       await client.query(
         `INSERT INTO requests(request_id,catalogue_seq,embedding_model,ranker_version,request_canonical,request_hash,
            response_canonical,response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_ref,payment_status,bot_id,settings_version,market_seq,
-           payment_chain_id,settle_via,tos_version,tos_hash,tos_proof)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'verified',$14,$15,$16,$17,$18,$19,$20,$21)`,
+           payment_chain_id,settle_via,tos_version,tos_hash,tos_proof,pay_to)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'verified',$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
         [request_id, seq, EMBEDDING_MODEL, RANKER_VERSION, reqCanon, sha256(reqCanon), out.canonical, out.hash,
          pay.payer, pay.mode, pay.network, pay.amount.toString(), pay.ref, botId(req), settings_version, mseq,
-         pay.chainId, pay.settle_via, tos.tos_version, tos.tos_hash, tos.proof]);
+         pay.chainId, pay.settle_via, tos.tos_version, tos.tos_hash, tos.proof, pay.payTo]);
       await reserveNonce(client, pay);   // same tx: replayed EIP-3009 nonce => 23505 => 409
       const debited: string[] = [];
       for (let i = 0; i < out.meta.length; i++) {
@@ -116,13 +118,13 @@ export function createApp() {
       res.json({ request_id: r.request_id, logged_hash: r.response_hash, replayed_hash: out.hash, match: out.hash === r.response_hash,
         request_hash_ok: sha256(r.request_canonical) === r.request_hash, catalogue_seq: Number(r.catalogue_seq),
         market_seq: r.market_seq == null ? null : Number(r.market_seq), settings_version: r.settings_version, ranker_version: r.ranker_version,
-        tos: r.tos_version == null ? null : { version: r.tos_version, sha256: r.tos_hash, proof: r.tos_proof }, payment: { network: r.payment_network, chain_id: r.payment_chain_id, settle_tx: r.settle_tx, settle_via: r.settle_via } });
+        tos: r.tos_version == null ? null : { version: r.tos_version, sha256: r.tos_hash, proof: r.tos_proof }, payment: { network: r.payment_network, chain_id: r.payment_chain_id, settle_tx: r.settle_tx, settle_via: r.settle_via, pay_to: r.pay_to } });
     } catch (e: any) { res.status(409).json({ error: String(e.message) }); }
   });
 
   app.get("/v1/requests/:id", async (req, res) => {
     const r = (await pool.query(`SELECT request_id,received_at,catalogue_seq,market_seq,settings_version,embedding_model,ranker_version,request_canonical,request_hash,
-      response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_status,settle_tx,settle_error,db_txid,bot_id,payment_chain_id,settle_via,tos_version,tos_hash,tos_proof FROM requests WHERE request_id=$1`, [req.params.id])).rows[0];
+      response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_status,settle_tx,settle_error,db_txid,bot_id,payment_chain_id,settle_via,tos_version,tos_hash,tos_proof,pay_to FROM requests WHERE request_id=$1`, [req.params.id])).rows[0];
     if (!r) return res.status(404).json({ error: "not found" });
     const imp = (await pool.query("SELECT rank,listing_id,provider_id,sponsored,fixed_atomic,bid_atomic,charge_micro_usdc FROM impressions WHERE request_id=$1 ORDER BY rank", [req.params.id])).rows;
     res.json({ ...r, impressions: imp });
@@ -145,7 +147,7 @@ export function createApp() {
     try { res.json(await setBid(String(req.params.lid), { bid_atomic: req.body?.bid_atomic }, "advertiser:" + res.locals.adv, res.locals.adv)); } catch (e) { fail(res, e); }
   });
   // Prepay via x402: the advertiser pays amount_atomic test USDC to the payee; credited only AFTER on-chain settlement.
-  app.post("/v1/advertisers/me/topup", advAuth, async (req, res) => {
+  app.post("/v1/advertisers/me/topup", banGuard(), advAuth, async (req, res) => {
     const amt = Number(req.query.amount_atomic ?? req.body?.amount_atomic);
     if (!Number.isSafeInteger(amt) || amt < TOPUP_MIN || amt > TOPUP_MAX) return res.status(400).json({ error: `amount_atomic must be ${TOPUP_MIN}..${TOPUP_MAX}` });
     const desc = `Prepaid advertiser balance top-up (${res.locals.adv})`;
@@ -160,7 +162,7 @@ export function createApp() {
     if (s.header) res.set("X-PAYMENT-RESPONSE", s.header);
     try {
       const c = await credit(res.locals.adv, amt, "topup_x402", { settle_tx: s.tx, payment_ref: pay.ref, payer: pay.payer, note: pay.mode,
-        payment_network: pay.network, payment_chain_id: pay.chainId, settle_via: s.via, tos_version: tos.tos_version, tos_hash: tos.tos_hash, tos_proof: tos.proof });
+        payment_network: pay.network, payment_chain_id: pay.chainId, settle_via: s.via, tos_version: tos.tos_version, tos_hash: tos.tos_hash, tos_proof: tos.proof, pay_to: pay.payTo });
       res.json({ advertiser_id: res.locals.adv, credited_atomic: amt, settle_tx: s.tx, mode: pay.mode, network: pay.network, settle_via: s.via, tos: { version: tos.tos_version, sha256: tos.tos_hash }, ...c });
     } catch (e) { fail(res, e); }
   });

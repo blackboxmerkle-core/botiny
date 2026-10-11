@@ -89,7 +89,7 @@ export function dashboardRouter() {
   r.get("/api/requests/:id", async (req, res) => {
     const row = (await q(`SELECT request_id, received_at, catalogue_seq, embedding_model, ranker_version, request_canonical, request_hash,
       response_canonical, response_hash, payer, payment_mode, payment_network, payment_amount_atomic::text AS amount_atomic, payment_status, settle_tx, settle_error, db_txid::text, bot_id, settings_version, market_seq::text,
-      payment_chain_id, settle_via, tos_version, tos_hash, tos_proof
+      payment_chain_id, settle_via, tos_version, tos_hash, tos_proof, pay_to
       FROM requests WHERE request_id=$1`, [req.params.id]))[0];
     if (!row) return res.status(404).json({ error: "not found" });
     const imps = await q(`SELECT i.rank, i.listing_id, i.provider_id, i.charge_micro_usdc::text AS charge, i.sponsored, i.fixed_atomic::text fixed, i.bid_atomic::text bid, i.db_txid::text, l.name

@@ -24,6 +24,7 @@ button.act{background:var(--acc);color:#000;border:0;padding:6px 12px;border-rad
 .hb .t{height:12px;background:#21262d;border-radius:3px;overflow:hidden}.hb .t span{display:block;height:100%;background:var(--acc)}.b-ad{background:var(--acc)}
 .subnav{display:flex;gap:4px;margin-bottom:4px}.subnav button{background:none;border:1px solid var(--line);color:var(--fg);padding:4px 10px;border-radius:6px;cursor:pointer}.subnav button.on{background:#21262d;border-color:var(--acc)}
 button.sm{background:#21262d;color:var(--fg);border:1px solid var(--line);padding:2px 8px;border-radius:5px;cursor:pointer;font-size:11px}
+.adm{display:grid;grid-template-columns:170px 1fr;gap:16px;margin-top:16px}.vnav{display:flex;flex-direction:column;gap:4px}.vnav button{text-align:left;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:9px 12px;border-radius:6px;cursor:pointer}.vnav button.on{background:var(--acc);color:#000;border-color:var(--acc);font-weight:600}.apanes>div>.card+.card{margin-top:16px}
 .filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}select,input[type=date]{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:5px 8px;border-radius:6px;width:auto}
 </style></head><body>
 <header><h1>bot-rec-market</h1><span class="pill" id="mode">…</span><span class="pill">read-only · basic auth · TESTNET</span>
@@ -50,21 +51,43 @@ button.sm{background:#21262d;color:var(--fg);border:1px solid var(--line);paddin
    <div class="filters"><select id="bh-bot"><option>research-bot</option><option>dev-bot</option></select></div><table id="bh"></table><p><button class="act" id="bh-more" onclick="bots(true)">Load older</button></p></div>
  </div></section>
 <section id="t-admin" class="hide">
- <div class="card" style="margin-bottom:16px"><h2>Terms of Service (DRAFT placeholder — not legal advice) <select id="tos-kind"><option value="bot">bot ToS</option><option value="advertiser">advertiser ToS</option></select> <span id="tos-ver" class="pill"></span></h2>
-  <p class="mut">Each save creates a new version + sha256. Payments must bind the CURRENT hash into the EIP-3009 nonce; older hashes are rejected as stale.</p>
-  <textarea id="tos-body" style="width:100%;height:220px;background:#0d1117;color:var(--fg);border:1px solid var(--line);border-radius:6px;font:12px ui-monospace,monospace"></textarea>
-  <div class="filters"><input id="tos-note" placeholder="change note"><button class="act" id="tos-save">Save as new version</button><span id="tos-msg" class="mut"></span></div><table id="tos-hist"></table></div>
- <div class="card testnet">Admin · TESTNET. All changes are append-only and versioned; each request stores the settings version and market sequence it used.</div>
- <div class="two" style="margin-top:16px">
+ <div class="card testnet">Admin · TESTNET. Every change is append-only/versioned and recorded in the audit log. Keys are never displayed — public addresses only.</div>
+ <div class="adm">
+ <div class="vnav" id="adm-nav"><button data-a="settings" class="on">Settings</button><button data-a="wallets">Wallets</button><button data-a="terms">Terms</button><button data-a="advertisers">Advertisers</button><button data-a="bans">Bots &amp; bans</button><button data-a="audit">Audit log</button></div>
+ <div class="apanes">
+ <div id="a-settings"><div class="two" >
   <div class="card"><h2>Pricing &amp; ranking settings <span id="ad-ver" class="pill"></span></h2><table id="ad-set"></table>
    <div class="filters" style="margin-top:8px"><input id="ad-note" placeholder="change note" style="width:260px"><button class="act" id="ad-save">Save new version</button> <span id="ad-msg" class="mut"></span></div>
    <p class="mut" id="ad-formula"></p></div>
   <div class="card"><h2>Settings history</h2><table id="ad-hist"></table></div>
+ </div></div>
+ <div id="a-wallets" class="hide">
+  <div class="card"><h2>Receiving wallet (payTo) — same address on every EVM chain <span id="w-ver" class="pill"></span></h2><div id="w-cur"></div>
+   <h3 class="sh">Change payTo</h3><p class="mut">EIP-55 checksummed address required; re-type it exactly to confirm. New 402s use it immediately; the previous address stays valid for verification for the grace window so in-flight payments still settle. Requests store the payTo actually paid.</p>
+   <div class="filters"><input id="w-new" placeholder="0x… (checksummed)" style="width:380px"><input id="w-confirm" placeholder="re-type address" style="width:380px"><input id="w-note" placeholder="note"><button class="act" id="w-save">Change payTo</button><span id="w-msg"></span></div>
+   <table id="w-hist"></table></div>
+  <div class="card" style="margin-top:16px"><h2>Relayer (gas wallet for our own settlement)</h2><div id="r-cur"></div><table id="r-gas"></table>
+   <h3 class="sh">Rotate relayer key</h3><p class="mut">The key is stored server-side in api/.env (0600) and never shown. Only the new address is returned. Fund the new address with test gas before chains come back into accepts.</p>
+   <div class="filters"><label><input type="radio" name="r-mode" value="gen" checked style="width:auto"> generate new</label><label><input type="radio" name="r-mode" value="set" style="width:auto"> set key</label><input id="r-key" type="password" placeholder="private key (only if 'set key')" autocomplete="off" style="width:330px"><input id="r-confirm" placeholder="type ROTATE" style="width:120px"><button class="act" id="r-go">Rotate</button><span id="r-msg"></span></div></div>
+  <div class="card" style="margin-top:16px"><h2>Payer / simulator wallet</h2><div id="p-cur"></div></div>
  </div>
- <div class="card" style="margin-top:16px"><h2>Advertisers</h2><table id="ad-advs"></table>
+ <div id="a-terms" class="hide"><div class="card" ><h2>Terms of Service (DRAFT placeholder — not legal advice) <select id="tos-kind"><option value="bot">bot ToS</option><option value="advertiser">advertiser ToS</option></select> <span id="tos-ver" class="pill"></span></h2>
+  <p class="mut">Each save creates a new version + sha256. Payments must bind the CURRENT hash into the EIP-3009 nonce; older hashes are rejected as stale.</p>
+  <textarea id="tos-body" style="width:100%;height:220px;background:#0d1117;color:var(--fg);border:1px solid var(--line);border-radius:6px;font:12px ui-monospace,monospace"></textarea>
+  <div class="filters"><input id="tos-note" placeholder="change note"><button class="act" id="tos-save">Save as new version</button><span id="tos-msg" class="mut"></span></div><table id="tos-hist"></table></div></div>
+ <div id="a-advertisers" class="hide"><div class="card" ><h2>Advertisers</h2><table id="ad-advs"></table>
   <div class="filters" style="margin-top:8px">New advertiser <input id="na-id" placeholder="adv:acme" style="width:160px"><input id="na-name" placeholder="name" style="width:160px"><button class="act" id="na-go">Create</button> <span id="na-msg" class="mono"></span></div></div>
  <div class="card" style="margin-top:16px"><h2>Listings — bids &amp; pause</h2><table id="ad-lst"></table></div>
- <div class="card" style="margin-top:16px"><h2>Recent bid / pause events</h2><table id="ad-ev"></table></div>
+ <div class="card" style="margin-top:16px"><h2>Recent bid / pause events</h2><table id="ad-ev"></table></div></div>
+ <div id="a-bans" class="hide">
+  <div class="card"><h2>Ban a bot</h2><p class="mut">Banned callers get <b>403 with the reason before any 402 or payment</b>, so a banned payer is never charged. <b>X-Bot-Id is self-declared (weak)</b> — wallet and IP/CIDR bans are the strong ones.</p>
+   <div class="filters"><select id="b-kind"><option value="wallet">payer wallet</option><option value="ip">IP / CIDR</option><option value="bot">bot id (X-Bot-Id)</option></select><input id="b-value" placeholder="0x… / 203.0.113.0/24 / bot-id" style="width:300px"><input id="b-reason" placeholder="reason" style="width:240px"><label class="mut">expires <input id="b-exp" type="datetime-local" style="width:auto"></label><button class="act" id="b-go">Ban</button><span id="b-msg"></span></div></div>
+  <div class="grid" id="b-kpi" style="margin-top:16px"></div>
+  <div class="card" style="margin-top:16px"><h2>Bans</h2><table id="b-list"></table></div>
+  <div class="card" style="margin-top:16px"><h2>Ban events (created / revoked / blocked attempts)</h2><table id="b-ev"></table></div>
+ </div>
+ <div id="a-audit" class="hide"><div class="card"><h2>Admin audit log</h2><table id="au"></table></div></div>
+ </div></div>
 </section>
 <section id="t-fin" class="hide">
  <div class="card testnet">⚠ TESTNET ONLY — EVM testnets, test USDC. Settlement by our own facilitator (relayer submits EIP-3009 transferWithAuthorization). Mainnet hard-disabled. No real funds. <span id="finnote"></span></div>
@@ -224,7 +247,25 @@ const SETK=[["query_price_atomic","Query price (bot pays per search)","atomic US
 async function tosLoad(){const t=await j("api/admin/tos"),k=$("#tos-kind").value,c=t[k].current;$("#tos-body").value=c.body;$("#tos-ver").textContent=`v${c.version} · ${c.sha256.slice(0,18)}…`;
  $("#tos-hist").innerHTML="<tr><th>v</th><th>When</th><th>sha256</th><th>Note</th><th></th></tr>"+t[k].history.map(h=>`<tr><td>${h.version}</td><td>${d(h.created_at)}</td><td><code>${esc(h.sha256)}</code></td><td>${esc(h.note||"")}</td><td><a target=_blank href="/v1/terms/${k==="bot"?"":"advertiser/"}${h.version}">view</a></td></tr>`).join("");}
 $("#tos-kind").onchange=tosLoad;$("#tos-save").onclick=async()=>{const r=await post("api/admin/tos",{kind:$("#tos-kind").value,body:$("#tos-body").value,note:$("#tos-note").value||null});$("#tos-msg").textContent=r.error||`saved v${r.version} (${r.sha256.slice(0,18)}…)`;tosLoad();};
-async function admin(){tosLoad();const s=await j("api/admin/state"),S=s.settings.settings;
+
+let admTab="settings";
+document.querySelectorAll("#adm-nav button").forEach(b=>b.onclick=()=>{admTab=b.dataset.a;document.querySelectorAll("#adm-nav button").forEach(x=>x.classList.toggle("on",x===b));document.querySelectorAll(".apanes>div").forEach(p=>p.classList.toggle("hide",p.id!=="a-"+admTab));admin()});
+async function walletsLoad(){const w=await j("api/admin/wallets");const P=w.pay_to;$("#w-ver").textContent="v"+P.version;
+ $("#w-cur").innerHTML=`<div class="kpi" style="font-size:18px"><code>${esc(P.pay_to)}</code></div><span class="mut">in force since ${d(P.since)} · used on all enabled EVM testnets · ${Object.values(CH).filter(c=>c.enabled).map(c=>`<a target=_blank href="${c.explorer}/address/${P.pay_to}">${esc(c.label)}</a>`).join(" · ")}</span>${P.previous?`<br><span class="badge y">grace</span> previous <code>${esc(P.previous.pay_to)}</code> still accepted until ${d(P.previous.until)}`:""}`;
+ $("#w-hist").innerHTML="<tr><th>v</th><th>payTo</th><th>Changed by</th><th>When</th><th>Note</th></tr>"+w.history.map(h=>`<tr><td>${h.version}</td><td><code>${esc(h.pay_to)}</code></td><td>${esc(h.changed_by)}</td><td>${d(h.created_at)}</td><td>${esc(h.note||"")}</td></tr>`).join("");
+ const R=w.relayer;$("#r-cur").innerHTML=`Address <code>${esc(R.address||"none")}</code> · x402.org fallback (Base Sepolia, temporary): <b>${R.fallback_enabled?"ON":"off"}</b>`;
+ $("#r-gas").innerHTML="<tr><th>Chain</th><th>Gas</th><th>Min</th><th>Status</th></tr>"+R.gas.map(g=>`<tr><td>${net(g.key)}</td><td>${g.balance??"?"} ${esc(g.native)}</td><td class="mut">${g.min}</td><td>${g.ok?'<span class="badge g">ok</span>':'<span class="badge r">LOW GAS</span>'} <span class="mut">${esc(g.settle_via)}</span></td></tr>`).join("");
+ $("#p-cur").innerHTML=`<code>${esc(w.payer.address)}</code> · used by ${w.payer.used_by.map(esc).join(", ")} · <span class="mut">${esc(w.payer.note)}</span>`;}
+$("#w-save").onclick=async()=>{const r=await post("api/admin/wallets/payto",{address:$("#w-new").value.trim(),confirm:$("#w-confirm").value.trim(),note:$("#w-note").value||null});$("#w-msg").innerHTML=r.error?`<span class="s5">${esc(r.error)}</span>`:`<span class="s2">payTo v${r.version} = ${esc(r.pay_to)} (previous accepted for ${r.grace_sec}s)</span>`;walletsLoad();};
+$("#r-go").onclick=async()=>{const gen=document.querySelector('input[name=r-mode]:checked').value==="gen";const r=await post("api/admin/relayer/rotate",{generate:gen,private_key:gen?undefined:$("#r-key").value,confirm:$("#r-confirm").value});$("#r-key").value="";$("#r-msg").innerHTML=r.error?`<span class="s5">${esc(r.error)}</span>`:`<span class="s2">new relayer ${esc(r.address)} — fund it with test gas</span>`;walletsLoad();};
+async function bansLoad(){const b=await j("api/admin/bans");const act=b.bans.filter(x=>x.active);
+ $("#b-kpi").innerHTML=[["Active bans",act.length],["Wallet bans",act.filter(x=>x.kind==="wallet").length],["IP/CIDR bans",act.filter(x=>x.kind==="ip").length],["Bot-id bans (weak)",act.filter(x=>x.kind==="bot").length],["Blocked attempts (24h)",b.blocked_24h]].map(([k,v])=>`<div class="card kpi">${v}<small>${k}</small></div>`).join("");
+ $("#b-list").innerHTML="<tr><th>#</th><th>Kind</th><th>Value</th><th>Reason</th><th>Expires</th><th>Blocked</th><th>Status</th><th>By</th><th></th></tr>"+b.bans.map(x=>`<tr><td>${x.ban_id}</td><td>${esc(x.kind)}${x.kind==="bot"?' <span class="mut">(weak)</span>':""}</td><td><code>${esc(x.value)}</code></td><td>${esc(x.reason)}</td><td>${x.expires_at?d(x.expires_at):'<span class="mut">never</span>'}</td><td>${x.blocked_count}${x.last_blocked_at?` <span class="mut">last ${d(x.last_blocked_at)}</span>`:""}</td><td>${x.active?'<span class="badge r">active</span>':x.revoked_at?`<span class="badge g">unbanned</span> <span class="mut">${esc(x.revoked_by)}</span>`:'<span class="badge y">expired</span>'}</td><td>${esc(x.created_by)} <span class="mut">${d(x.created_at)}</span></td><td>${x.active?`<button class="sm" onclick="unban(${x.ban_id})">Unban</button>`:""}</td></tr>`).join("")+(b.bans.length?"":'<tr><td colspan=9 class="mut">no bans</td></tr>');
+ $("#b-ev").innerHTML="<tr><th>When</th><th>Ban</th><th>Event</th><th>Details</th></tr>"+b.events.map(e=>`<tr><td>${d(e.at)}</td><td>#${e.ban_id} ${esc(e.kind)} <code>${esc(e.value)}</code></td><td>${e.event==="blocked"?'<span class="badge r">blocked</span>':esc(e.event)}</td><td class="mono" style="font-size:11px">${esc(JSON.stringify(e.details))}</td></tr>`).join("");}
+$("#b-go").onclick=async()=>{const e=$("#b-exp").value;const r=await post("api/admin/bans",{kind:$("#b-kind").value,value:$("#b-value").value.trim(),reason:$("#b-reason").value,expires_at:e?new Date(e).toISOString():null});$("#b-msg").innerHTML=r.error?`<span class="s5">${esc(r.error)}</span>`:`<span class="s2">ban #${r.ban_id} created</span>`;bansLoad();};
+async function unban(id){const r=await post(`api/admin/bans/${id}/revoke`,{});if(r.error)alert(r.error);bansLoad();}
+async function auditLoad(){const a=await j("api/admin/audit");$("#au").innerHTML="<tr><th>When</th><th>Actor</th><th>Action</th><th>Details</th></tr>"+a.map(x=>`<tr><td>${d(x.at)}</td><td>${esc(x.actor)}</td><td><b>${esc(x.action)}</b></td><td class="mono" style="font-size:11px">${esc(JSON.stringify(x.details))}</td></tr>`).join("")||'<tr><td class="mut">empty</td></tr>';}
+async function admin(){if(admTab==="wallets")return walletsLoad();if(admTab==="terms")return tosLoad();if(admTab==="bans")return bansLoad();if(admTab==="audit")return auditLoad();const s=await j("api/admin/state"),S=s.settings.settings;
  $("#ad-ver").textContent="v"+s.settings.version;
  $("#ad-set").innerHTML=SETK.map(([k,l,u])=>`<tr><td>${l}<br><span class="mut">${u}</span></td><td><input id="set-${k}" type="number" value="${S[k]}" style="width:140px"></td><td class="mut">${k.endsWith("atomic")?U6(S[k])+" USDC":""}</td></tr>`).join("");
  $("#ad-formula").innerHTML=`Qualify: score ≥ ${S.relevance_threshold_ppm/1e6}. Promo score = relevance_ppm + ${S.bid_weight_ppm_per_atomic} × bid_atomic. Top ${S.promoted_slots} funded bidders (balance ≥ fixed ${U6(S.fixed_cpi_atomic)} + bid) take the first slots, labelled Sponsored and debited; everything else is organic by relevance and free.`;

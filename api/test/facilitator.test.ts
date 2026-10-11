@@ -31,6 +31,7 @@ after(async () => { setRpcFactory(null); await pool.end(); });
 test("EIP-3009 verify: valid passes; wrong payTo, expired, insufficient amount, wrong chain domain, replayed nonce fail", async () => {
   const rpc = fakeRpc();
   assert.deepEqual(await verifyExact(await sign(), bs, { amount: 1000n, payTo: PAYTO }, { rpc }), { ok: true, payer: payer.address });
+  assert.equal((await verifyExact(await sign(), bs, { amount: 1000n, payTo: ["0x7A21956f3bD1821229ba3EA40e82056f1CA16e24", PAYTO] }, { rpc })).ok, true, "previous payTo accepted when in the allowed set (grace)");
   const r1 = await verifyExact(await sign({ to: "0x000000000000000000000000000000000000dEaD" }), bs, { amount: 1000n, payTo: PAYTO }, { rpc });
   assert.match((r1 as any).reason, /invalid_payto/);
   const now = Math.floor(Date.now() / 1000);

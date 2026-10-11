@@ -2,7 +2,7 @@ import { createPublicClient, http, erc20Abi, formatUnits, parseAbiItem } from "v
 import { baseSepolia } from "viem/chains";
 import { USDC_BASE_SEPOLIA } from "./payment";
 import { chainFor } from "./chains";
-export const PAYEE = (process.env.PAY_TO_ADDRESS || "0x0e66433540a91D9683E939c8Ac17BC084571D050") as `0x${string}`;
+export let PAYEE = (process.env.PAY_TO_ADDRESS || "0x0e66433540a91D9683E939c8Ac17BC084571D050") as `0x${string}`;
 export const PAYER = (process.env.PAYER_ADDRESS || "0x0b68c3ecBB5DC0E79a4399eE7eA43d07Cb9A5402") as `0x${string}`; // public address only
 const client = createPublicClient({ chain: baseSepolia, transport: http(process.env.BASE_SEPOLIA_RPC ?? "https://sepolia.base.org") });
 let cache: { at: number; data: any } | null = null;
@@ -10,6 +10,8 @@ let cache: { at: number; data: any } | null = null;
 const receiptCache = new Map<string, string>();
 export type TxRef = string | { tx: string; network?: string | null };
 export async function chainView(txs: TxRef[]) {
+  const now = (await (await import("./wallets")).payToState()).pay_to as `0x${string}`;
+  if (now !== PAYEE) { PAYEE = now; cache = null; }
   const fresh = cache && Date.now() - cache.at < 30000;
   if (fresh) { await fillReceipts(txs); return { ...cache!.data, receipts: Object.fromEntries(receiptCache) }; }
   const bal = (a: `0x${string}`) => client.readContract({ address: USDC_BASE_SEPOLIA as `0x${string}`, abi: erc20Abi, functionName: "balanceOf", args: [a] });

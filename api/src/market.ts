@@ -36,13 +36,13 @@ export async function advertiserByKey(key: string | undefined | null) {
   if (!key) return null;
   return (await pool.query("SELECT advertiser_id, name FROM advertisers WHERE api_key_hash=$1", [sha256(key)])).rows[0] ?? null;
 }
-export async function credit(adv: string, amount: number, kind: "admin_credit" | "topup_x402", extra: { settle_tx?: string; payment_ref?: string; payer?: string; note?: string; payment_network?: string; payment_chain_id?: number | null; settle_via?: string; tos_version?: number; tos_hash?: string; tos_proof?: any } = {}) {
+export async function credit(adv: string, amount: number, kind: "admin_credit" | "topup_x402", extra: { settle_tx?: string; payment_ref?: string; payer?: string; note?: string; payment_network?: string; payment_chain_id?: number | null; settle_via?: string; tos_version?: number; tos_hash?: string; tos_proof?: any; pay_to?: string } = {}) {
   if (!Number.isSafeInteger(amount) || amount <= 0 || amount > 10_000_000) throw Object.assign(new Error("amount_atomic must be 1..10000000"), { status: 400 });
   return withMarketLock(async c => {
-    const r = await c.query(`INSERT INTO balance_ledger(advertiser_id,delta_atomic,kind,settle_tx,payment_ref,payer,note,payment_network,payment_chain_id,settle_via,tos_version,tos_hash,tos_proof)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING seq`,
+    const r = await c.query(`INSERT INTO balance_ledger(advertiser_id,delta_atomic,kind,settle_tx,payment_ref,payer,note,payment_network,payment_chain_id,settle_via,tos_version,tos_hash,tos_proof,pay_to)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING seq`,
       [adv, amount, kind, extra.settle_tx ?? null, extra.payment_ref ?? null, extra.payer ?? null, extra.note ?? null, extra.payment_network ?? null, extra.payment_chain_id ?? null,
-       extra.settle_via ?? null, extra.tos_version ?? null, extra.tos_hash ?? null, extra.tos_proof ?? null]);
+       extra.settle_via ?? null, extra.tos_version ?? null, extra.tos_hash ?? null, extra.tos_proof ?? null, extra.pay_to ?? null]);
     return { seq: Number(r.rows[0].seq), balance_atomic: await balanceOf(c, adv) };
   });
 }

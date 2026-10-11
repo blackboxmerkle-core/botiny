@@ -1,4 +1,5 @@
 import { sha256 } from "./canonical";
+import { getAddress } from "viem";
 import { pool } from "./db";
 import { configuredChains, chainFor, EvmChain, MAINNET_ALLOWED } from "./chains";
 import { decodeExactPayload, verifyExact, settleExact, ExactPayload } from "./facilitator";
@@ -11,21 +12,23 @@ import { activeChains, FALLBACK_URL } from "./relayer";
  */
 export const PRICE_ATOMIC = BigInt(process.env.PRICE_ATOMIC ?? "1000");
 export const MODE = (process.env.PAYMENT_MODE ?? "mock") as "mock" | "x402";
-export const PAY_TO = process.env.PAY_TO_ADDRESS || "0x0e66433540a91D9683E939c8Ac17BC084571D050";   // same payTo on every EVM chain
+import { payToState, acceptablePayTos, DEFAULT_PAY_TO } from "./wallets";
+export const PAY_TO = DEFAULT_PAY_TO;   // initial default only; the payTo in force is versioned in wallet_settings (Admin → Wallets)
 export const NETWORK = "multi-evm-testnet";
 export const USDC_BASE_SEPOLIA = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 if (MAINNET_ALLOWED as boolean) throw new Error("mainnet is hard-disabled in this build");
 if (!/^0x[0-9a-fA-F]{40}$/.test(PAY_TO)) throw new Error("PAY_TO_ADDRESS invalid");
 
-export function acceptFor(c: EvmChain, settle_via: string, resource: string, amount: bigint, description: string, tos?: any) {
+export function acceptFor(c: EvmChain, settle_via: string, resource: string, amount: bigint, description: string, tos?: any, payTo: string = PAY_TO) {
   return { scheme: "exact", network: c.key, maxAmountRequired: amount.toString(), resource, description, mimeType: "application/json",
-    payTo: PAY_TO, maxTimeoutSeconds: 120, asset: c.usdc,
+    payTo, maxTimeoutSeconds: 120, asset: c.usdc,
     extra: { name: c.eip712.name, version: c.eip712.version, chainId: c.chainId, caip2: c.caip2, settlement: settle_via, ...(tos ? { tos: { version: tos.version, url: tos.url, sha256: tos.sha256 } } : {}) } };
 }
 /** One 'accepts' entry per enabled testnet whose relayer has gas (mock mode: all configured testnets). */
 export async function accepts(resource: string, amount: bigint, description: string, tos?: any) {
   const list = MODE === "mock" ? configuredChains().map(chain => ({ chain, settle_via: "mock" })) : await activeChains();
-  return list.map(x => acceptFor(x.chain, x.settle_via, resource, amount, description, tos));
+  const { pay_to } = await payToState();
+  return list.map(x => acceptFor(x.chain, x.settle_via, resource, amount, description, tos, pay_to));
 }
 /** Back-compat helper (single Base Sepolia entry). */
 export function requirements(resource: string, amount: bigint = PRICE_ATOMIC, description = "Ranked bot-service recommendations") {
@@ -33,7 +36,7 @@ export function requirements(resource: string, amount: bigint = PRICE_ATOMIC, de
 }
 
 export interface Verified { mode: "mock" | "x402"; payer: string; ref: string; amount: bigint; network: string; chainId: number | null; nonce: string | null;
-  settle_via: string; payload?: ExactPayload; accept?: any; chain?: EvmChain }
+  settle_via: string; payload?: ExactPayload; accept?: any; chain?: EvmChain; payTo: string }
 /** Decode only (to read the authorization nonce for ToS binding before full verification). */
 export function peekNonce(header: string): string | null { return MODE === "mock" ? null : decodeExactPayload(header)?.payload.authorization.nonce ?? null; }
 
@@ -46,7 +49,7 @@ export async function verifyPayment(header: string | undefined, acceptList: any[
   if (MODE === "mock") {
     const m = /^mock:([A-Za-z0-9_-]{1,64})(?::(0x[0-9a-fA-F]{40}))?$/.exec(header);
     if (!m) return { error: "mock mode: X-PAYMENT must be mock:<nonce>[:<0xpayer>]" };
-    return { mode: "mock", payer: m[2] ?? "0xmock", ref, amount, network: "mock", chainId: null, nonce: null, settle_via: "mock" };
+    return { mode: "mock", payer: m[2] ?? "0xmock", ref, amount, network: "mock", chainId: null, nonce: null, settle_via: "mock", payTo: (await payToState()).pay_to };
   }
   const p = decodeExactPayload(header);
   if (!p) return { error: "malformed X-PAYMENT (expected base64 JSON x402 'exact' EVM payload)" };
@@ -54,9 +57,9 @@ export async function verifyPayment(header: string | undefined, acceptList: any[
   if (!chain) return { error: `unsupported network ${p.network}: EVM testnets only (v1 names or CAIP-2)` };
   const accept = acceptList.find(a => a.network === chain.key);
   if (!accept) return { error: `network ${chain.key} not currently accepted (disabled or relayer has no gas)` };
-  const v = await verifyExact(p, chain, { amount, payTo: PAY_TO }, { nonceUsedInDb });
+  const v = await verifyExact(p, chain, { amount, payTo: await acceptablePayTos() }, { nonceUsedInDb });   // current payTo, or previous within grace
   if (!v.ok) return { error: "payment invalid: " + v.reason };
-  return { mode: "x402", payer: v.payer, ref, amount, network: chain.key, chainId: chain.chainId, nonce: p.payload.authorization.nonce.toLowerCase(), settle_via: accept.extra.settlement, payload: p, accept, chain };
+  return { mode: "x402", payer: v.payer, ref, amount, network: chain.key, chainId: chain.chainId, nonce: p.payload.authorization.nonce.toLowerCase(), settle_via: accept.extra.settlement, payload: p, accept, chain, payTo: getAddress(p.payload.authorization.to) };
 }
 /** Reserve the nonce inside the caller's DB transaction (PK violation => replay => 409). */
 export async function reserveNonce(c: { query: (s: string, p?: any[]) => Promise<any> }, p: Verified) {
@@ -68,7 +71,7 @@ export async function settlePayment(p: Verified): Promise<{ ok: boolean; tx?: st
   if (p.settle_via === "facilitator-fallback") {
     // TEMPORARY: relayer unfunded on Base Sepolia -> x402.org facilitator settles. Verification above was still ours.
     const { useFacilitator } = await import("x402/verify");
-    const reqs = { ...p.accept, extra: { name: p.accept.extra.name, version: p.accept.extra.version } };
+    const reqs = { ...p.accept, payTo: p.payTo, extra: { name: p.accept.extra.name, version: p.accept.extra.version } };
     const s = await useFacilitator({ url: FALLBACK_URL as `${string}://${string}` }).settle({ ...p.payload, network: p.network } as any, reqs as any);
     return { ok: s.success, tx: s.transaction || undefined, via: "facilitator-fallback", header: Buffer.from(JSON.stringify({ ...s, settledBy: "x402.org-fallback" })).toString("base64"),
       error: s.success ? undefined : "fallback facilitator: " + String((s as any).errorReason ?? (s as any).error ?? "unknown").slice(0, 400) };

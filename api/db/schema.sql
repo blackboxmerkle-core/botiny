@@ -154,3 +154,41 @@ ALTER TABLE balance_ledger ADD COLUMN IF NOT EXISTS settle_via TEXT;
 ALTER TABLE balance_ledger ADD COLUMN IF NOT EXISTS tos_version INT;
 ALTER TABLE balance_ledger ADD COLUMN IF NOT EXISTS tos_hash TEXT;
 ALTER TABLE balance_ledger ADD COLUMN IF NOT EXISTS tos_proof JSONB;
+
+-- ---- Admin: versioned payTo wallet, audit log, bans ----
+CREATE TABLE IF NOT EXISTS wallet_settings (      -- append-only; latest row = payTo in force
+  version    SERIAL PRIMARY KEY,
+  pay_to     TEXT NOT NULL,
+  changed_by TEXT NOT NULL,
+  note       TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS admin_audit (
+  id     BIGSERIAL PRIMARY KEY,
+  at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actor  TEXT NOT NULL,
+  action TEXT NOT NULL,
+  details JSONB NOT NULL DEFAULT '{}'
+);
+CREATE TABLE IF NOT EXISTS bans (
+  ban_id     SERIAL PRIMARY KEY,
+  kind       TEXT NOT NULL CHECK (kind IN ('bot','wallet','ip')),
+  value      TEXT NOT NULL,                 -- bot id | checksummed address (stored lowercase) | IP or CIDR
+  reason     TEXT NOT NULL,
+  expires_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at TIMESTAMPTZ,
+  revoked_by TEXT,
+  blocked_count INT NOT NULL DEFAULT 0,
+  last_blocked_at TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS ban_events (          -- created / revoked / blocked attempts
+  id      BIGSERIAL PRIMARY KEY,
+  ban_id  INT NOT NULL REFERENCES bans(ban_id),
+  at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  event   TEXT NOT NULL,
+  details JSONB NOT NULL DEFAULT '{}'
+);
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS pay_to TEXT;
+ALTER TABLE balance_ledger ADD COLUMN IF NOT EXISTS pay_to TEXT;
