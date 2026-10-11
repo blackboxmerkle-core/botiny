@@ -51,7 +51,7 @@ test("older entries stay reachable: pagination, search, legacy rows, settle_fail
   }
   const seen: string[] = []; let before: string | null = null;
   for (let guard = 0; guard < 50; guard++) {
-    const r = await fetch(base + "/dashboard/api/requests?limit=3" + (before ? "&before=" + encodeURIComponent(before) : ""), { headers: AUTH });
+    const r: Response = await fetch(base + "/dashboard/api/requests?limit=3" + (before ? "&before=" + encodeURIComponent(before) : ""), { headers: AUTH });
     assert.equal(r.status, 200);
     seen.push(...(await r.json()).map((x: any) => x.request_id));
     before = r.headers.get("X-Next-Before"); if (!before) break;
