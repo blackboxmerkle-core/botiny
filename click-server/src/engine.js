@@ -17,16 +17,17 @@ export class ClickEngine {
     const { incentivised, items } = buildResultSet(ranked, cfg);
     const results = []; let escrow = 0;
     for (const it of items) {
-      const result_id = `${set_id}:${it.rank}`;
+      const rank = it.response_rank ?? it.rank;   // caller's rank if supplied (curation may drop rows)
+      const result_id = `${set_id}:${rank}`;
       const { token, payload } = await signToken(this.signingKey, this.kid, {
-        result_id, set_id, request_id, rank: it.rank, listing_id: it.listing_id, provider_id: it.provider_id ?? it.cluster_id,
+        result_id, set_id, request_id, rank, listing_id: it.listing_id, provider_id: it.provider_id ?? it.cluster_id,
         cluster_id: it.cluster_id, bot_wallet, dest_url: it.dest_url, show_atomic: it.show_atomic, click_atomic: it.click_atomic, channel,
       }, { now, validityMs: cfg.tokenPayValidityMs });
       store.putToken({ token, ...payload, dest_url: it.dest_url, issued_at: now, expires_at: payload.exp });
       let code;
       for (let i = 0; i < 5; i++) { code = base62Code(cfg.shortCodeLength); try { store.putShortLink({ code, token, dest_url: it.dest_url, exp: payload.exp }); break; } catch { code = null; } }
       escrow += it.show_atomic + it.click_atomic;
-      results.push({ listing_id: it.listing_id, rank: it.rank, harvest_token: token, short_url: `${this.shortBase}/${code}`,
+      results.push({ listing_id: it.listing_id, rank, harvest_token: token, short_url: `${this.shortBase}/${code}`,
         track_url: `${this.shortBase}/r/${token}`, show_incentive_atomic: it.show_atomic, click_incentive_atomic: it.click_atomic, disclosure: it.disclosure });
     }
     return { set_id, incentivised, escrow_atomic: escrow, results };

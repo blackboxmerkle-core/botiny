@@ -14,7 +14,8 @@ import { banGuard } from "./bans";
 import { payToState } from "./wallets";
 import { activeChains, relayerAddress } from "./relayer";
 import { currentSettings } from "./settings";
-import { MARKET_LOCK, marketSeq, assertNonNegative, advertiserByKey, advertiserSummary, setBid, credit } from "./market";
+import { MARKET_LOCK, marketSeq, assertNonNegative, advertiserByKey, advertiserSummary, setBid, setIncentive, credit } from "./market";
+import { issueClickLinks } from "./clicks";
 
 export const botId = (req: express.Request) => { const b = req.get("X-Bot-Id"); return b && /^[A-Za-z0-9._:-]{1,64}$/.test(b) ? b : null; };
 const publicBase = (req: express.Request) => process.env.PUBLIC_BASE_URL?.replace(/\/$/, "") ?? `${req.protocol}://${req.get("host")}`;
@@ -62,6 +63,7 @@ export function createApp() {
     const request_id = "req_" + randomUUID();
     res.locals.request_id = request_id;
     let out;
+    let click_links: any[] = [];
     try {
       await client.query("BEGIN ISOLATION LEVEL READ COMMITTED");
       await client.query("SELECT pg_advisory_xact_lock($1)", [MARKET_LOCK]);
@@ -89,6 +91,12 @@ export function createApp() {
           debited.push(m.provider_id);
         }
       }
+      // click-server: signed per-result links + incentive escrow, same transaction; kept out of response_hash
+      const cl = await issueClickLinks(client, { request_id, bot_wallet: (pay.payer || botId(req) || "unknown").toLowerCase(), channel: req.get("X-Bot-Channel"),
+        market_seq: mseq, settings: out.settings ?? settings, results: out.body.results, providers: out.meta.map((m: any) => m.provider_id) });
+      click_links = cl.click_links;
+      debited.push(...cl.debited);
+      if (cl.kid) await client.query("UPDATE requests SET click_kid=$2, click_config=$3 WHERE request_id=$1", [request_id, cl.kid, cl.config]);
       await assertNonNegative(client, debited);
       if (process.env.FAIL_AFTER_IMPRESSIONS === "1") throw new Error("injected failure");
       await client.query("COMMIT");
@@ -105,7 +113,7 @@ export function createApp() {
     if (!s.ok) res.locals.error = "settlement failed: " + (s.error ?? "unknown");
     if (s.header) res.set("X-PAYMENT-RESPONSE", s.header);
     if (!s.ok) return res.status(402).json({ error: "settlement failed", reason: s.error ?? "unknown", request_id });
-    res.json({ request_id, response_hash: out.hash, response: out.body, payment: { network: pay.network, settle_tx: s.tx ?? null, settle_via: s.via }, tos: { version: tos.tos_version, sha256: tos.tos_hash, proof: tos.proof } });
+    res.json({ request_id, response_hash: out.hash, response: out.body, click_links, payment: { network: pay.network, settle_tx: s.tx ?? null, settle_via: s.via }, tos: { version: tos.tos_version, sha256: tos.tos_hash, proof: tos.proof } });
   });
 
   app.get("/v1/requests/:id/replay", async (req, res) => {
@@ -145,6 +153,9 @@ export function createApp() {
   app.get("/v1/advertisers/me", advAuth, async (_req, res) => res.json(await advertiserSummary(res.locals.adv)));
   app.put("/v1/advertisers/me/listings/:lid/bid", advAuth, async (req, res) => {
     try { res.json(await setBid(String(req.params.lid), { bid_atomic: req.body?.bid_atomic }, "advertiser:" + res.locals.adv, res.locals.adv)); } catch (e) { fail(res, e); }
+  });
+  app.put("/v1/advertisers/me/listings/:lid/incentive", advAuth, async (req, res) => {
+    try { res.json(await setIncentive(String(req.params.lid), { show_atomic: req.body?.show_atomic, click_atomic: req.body?.click_atomic }, "advertiser:" + res.locals.adv, res.locals.adv)); } catch (e) { fail(res, e); }
   });
   // Prepay via x402: the advertiser pays amount_atomic test USDC to the payee; credited only AFTER on-chain settlement.
   app.post("/v1/advertisers/me/topup", banGuard(), advAuth, async (req, res) => {
