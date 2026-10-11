@@ -3,7 +3,10 @@
 import { createWalletClient, createPublicClient, http, publicActions, erc20Abi } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
-import { wrapFetchWithPayment, decodeXPaymentResponse } from "x402-fetch";
+import { paidFetch } from "../src/payclient";
+const decodeXPaymentResponse = (h: string) => JSON.parse(Buffer.from(h, "base64").toString("utf8"));
+// Pays only on chains where the payer holds test USDC (currently Base Sepolia). ToS accepted by binding its hash into the EIP-3009 nonce.
+const PAY_NETWORKS = (process.env.SIM_NETWORKS ?? "base-sepolia").split(",");
 import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 
 const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
@@ -21,13 +24,8 @@ const wallet = createWalletClient({ account, chain: baseSepolia, transport: http
 const pub = createPublicClient({ chain: baseSepolia, transport: http("https://sepolia.base.org") });
 if (wallet.chain.id !== 84532) throw new Error("refusing: not Base Sepolia");
 
-// Only ever pay exact/base-sepolia/testnet-USDC requirements at or below the cap.
-const selector = (reqs: any[]) => {
-  const r = reqs.find(x => x.scheme === "exact" && x.network === "base-sepolia" && x.asset?.toLowerCase() === USDC.toLowerCase() && BigInt(x.maxAmountRequired) <= MAX_PER_PAYMENT);
-  if (!r) throw new Error("no acceptable testnet requirement (network/asset/amount)");
-  return r;
-};
-const payFetch = wrapFetchWithPayment(fetch, wallet as any, MAX_PER_PAYMENT, selector as any);
+const payFetch = async (url: string, route: string, params: unknown, body: string | undefined, headers: Record<string, string>) =>
+  (await paidFetch(url, route, params, body, { account, networks: PAY_NETWORKS, maxAmount: MAX_PER_PAYMENT, headers })).res;
 
 function baseUrl(): string {
   const env = existsSync(".env") ? readFileSync(".env", "utf8") : "";
@@ -85,7 +83,7 @@ async function step(bot: string) {
   if (spent(bot) + MAX_PER_PAYMENT > DAILY_BUDGET) { log(bot, "daily_budget_reached", { spent_atomic: spent(bot).toString() }); return; }
   const q = query(bot), k = 3 + Math.floor(Math.random() * 3);
   const t0 = Date.now();
-  const r = await payFetch(`${base}/v1/recommend`, { method: "POST", headers: { "content-type": "application/json", "X-Bot-Id": bot, "ngrok-skip-browser-warning": "1" }, body: JSON.stringify({ query: q, k }) });
+  const r = await payFetch(`${base}/v1/recommend`, "/v1/recommend", { query: q, k }, JSON.stringify({ query: q, k }), { "X-Bot-Id": bot });
   const xpr = r.headers.get("x-payment-response");
   const pr = xpr ? decodeXPaymentResponse(xpr) : null;
   const body: any = await r.json().catch(() => ({}));
@@ -151,7 +149,7 @@ async function advStep(id: string) {
   if (bal < 2000n && topped + ADV_TOPUP <= ADV_CAP_TOTAL && since > ADV_REFILL_GAP_MS) {
     const payer = await payerBalance();
     if (payer < MIN_PAYER_BALANCE) { log(id, "GLOBAL_STOP_low_balance", {}); stopping = true; return; }
-    const r = await payFetch(`${baseUrl()}/v1/advertisers/me/topup?amount_atomic=${ADV_TOPUP}`, { method: "POST", headers: { ...B, "X-Bot-Id": id } });
+    const r = await payFetch(`${baseUrl()}/v1/advertisers/me/topup?amount_atomic=${ADV_TOPUP}`, "/v1/advertisers/me/topup", { advertiser_id: id, amount_atomic: Number(ADV_TOPUP) }, undefined, { ...B, "X-Bot-Id": id });
     const xpr = r.headers.get("x-payment-response"); const pr = xpr ? decodeXPaymentResponse(xpr) : null;
     const j: any = await r.json().catch(() => ({}));
     if (r.status === 200) { st[id].last_topup = Date.now(); writeFileSync(ADV_FILE, JSON.stringify(st, null, 1)); }

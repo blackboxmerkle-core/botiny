@@ -1,3 +1,5 @@
+import { tosHashOf, DEFAULT_TOS } from "../src/tos";
+const TOSH = tosHashOf(DEFAULT_TOS.bot), TOSA = tosHashOf(DEFAULT_TOS.advertiser);
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
@@ -13,7 +15,7 @@ const get = async (p: string) => { const r = await fetch(base + p, { headers: AU
 
 test("dashboard serves HTML and read-only JSON APIs", async () => {
   await fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json" }, body: "{\"query\":\"dash\"}" }); // 402
-  const ok = await (await fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json", "X-PAYMENT": "mock:dash" + Date.now() }, body: "{\"query\":\"github issues mcp\",\"k\":2}" })).json();
+  const ok = await (await fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json", "X-TOS-ACCEPT": TOSH, "X-PAYMENT": "mock:dash" + Date.now() }, body: "{\"query\":\"github issues mcp\",\"k\":2}" })).json();
   await new Promise(r => setTimeout(r, 100)); // api_log write is async
   assert.match(await (await get("/dashboard/")).text(), /bot-rec-market/);
   const u = await (await get("/dashboard/api/usage")).json();
@@ -44,7 +46,7 @@ test("older entries stay reachable: pagination, search, legacy rows, settle_fail
   // 7 requests; page through 3 at a time
   const ids: string[] = [];
   for (let i = 0; i < 7; i++) {
-    const r = await (await fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json", "X-PAYMENT": `mock:pg${i}${Date.now()}` }, body: JSON.stringify({ query: "page test " + i, k: 2 }) })).json();
+    const r = await (await fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json", "X-TOS-ACCEPT": TOSH, "X-PAYMENT": `mock:pg${i}${Date.now()}` }, body: JSON.stringify({ query: "page test " + i, k: 2 }) })).json();
     ids.push(r.request_id); await new Promise(r => setTimeout(r, 5));
   }
   const seen: string[] = []; let before: string | null = null;
@@ -69,11 +71,26 @@ test("older entries stay reachable: pagination, search, legacy rows, settle_fail
   }
   // settlement failure reason is stored and returned
   process.env.MOCK_SETTLE_FAIL = "1";
-  const f = await fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json", "X-PAYMENT": "mock:sf" + Date.now() }, body: JSON.stringify({ query: "settle fail", k: 1 }) });
+  const f = await fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json", "X-TOS-ACCEPT": TOSH, "X-PAYMENT": "mock:sf" + Date.now() }, body: JSON.stringify({ query: "settle fail", k: 1 }) });
   delete process.env.MOCK_SETTLE_FAIL;
   const fj = await f.json();
   assert.equal(f.status, 402); assert.equal(fj.reason, "mock_settle_failure");
   const d = await (await fetch(base + "/dashboard/api/requests/" + fj.request_id, { headers: AUTH })).json();
   assert.equal(d.payment_status, "settle_failed"); assert.equal(d.settle_error, "mock_settle_failure");
   assert.equal((await (await fetch(base + "/v1/requests/" + fj.request_id + "/replay")).json()).match, true);
+});
+test("admin ToS editor: new version per save, served at /v1/terms, DRAFT enforced, old hash becomes stale", async () => {
+  const H2 = { ...AUTH, "content-type": "application/json" };
+  const t0 = await (await get("/dashboard/api/admin/tos")).json();
+  const body = t0.advertiser.current.body + "\n8. DRAFT: edited in test.\n";
+  const r = await (await fetch(base + "/dashboard/api/admin/tos", { method: "POST", headers: H2, body: JSON.stringify({ kind: "advertiser", body, note: "t" }) })).json();
+  assert.equal(r.version, t0.advertiser.current.version + 1);
+  const page = await fetch(base + "/v1/terms/advertiser/" + r.version);
+  assert.equal(await page.text(), body); assert.equal(page.headers.get("x-tos-sha256"), r.sha256);
+  assert.equal((await fetch(base + "/dashboard/api/admin/tos", { method: "POST", headers: H2, body: JSON.stringify({ kind: "bot", body: "no marker ".repeat(10) }) })).status, 400);
+  assert.equal((await fetch(base + "/dashboard/api/admin/tos", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status, 401);
+  const terms = await (await fetch(base + "/v1/terms")).json();
+  assert.equal(terms.advertiser.sha256, r.sha256); assert.match(terms.bot.url, /\/v1\/terms\/1$/);
+  const un = await (await fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json" }, body: "{\"query\":\"t\"}" })).json();
+  assert.equal(un.tos.sha256, terms.bot.sha256); assert.ok(un.accepts.length >= 6 && un.accepts.every((a: any) => a.extra.tos.sha256 === terms.bot.sha256));
 });

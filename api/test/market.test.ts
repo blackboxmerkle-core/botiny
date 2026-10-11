@@ -1,3 +1,5 @@
+import { tosHashOf, DEFAULT_TOS } from "../src/tos";
+const TOSH = tosHashOf(DEFAULT_TOS.bot), TOSA = tosHashOf(DEFAULT_TOS.advertiser);
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
@@ -12,7 +14,7 @@ after(async () => { server.close(); await pool.end(); });
 const H = { "content-type": "application/json", ...AUTH };
 const admin = (p: string, body: any) => fetch(base + "/dashboard/api/admin" + p, { method: "POST", headers: H, body: JSON.stringify(body) }).then(async r => ({ status: r.status, ...(await r.json()) }));
 let n = 0;
-const rec = (query: string, k = 5, extra: Record<string, string> = {}) => fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json", "X-PAYMENT": `mock:m${Date.now()}${n++}`, ...extra }, body: JSON.stringify({ query, k }) }).then(async r => ({ status: r.status, ...(await r.json()) }));
+const rec = (query: string, k = 5, extra: Record<string, string> = {}) => fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json", "X-TOS-ACCEPT": TOSH, "X-PAYMENT": `mock:m${Date.now()}${n++}`, ...extra }, body: JSON.stringify({ query, k }) }).then(async r => ({ status: r.status, ...(await r.json()) }));
 const balance = async (a: string) => Number((await pool.query("SELECT COALESCE(SUM(delta_atomic),0)::text b FROM balance_ledger WHERE advertiser_id=$1", [a])).rows[0].b);
 const listing = async (provider_id: string, name: string, description: string) =>
   (await fetch(base + "/v1/listings", { method: "POST", headers: H, body: JSON.stringify({ provider_id, name, description, address: "https://" + provider_id.replace(/\W/g, "") + ".example", kind: "mcp" }) })).json();
@@ -108,7 +110,7 @@ test("advertiser API: auth, balance view, bid cap, ownership, x402 top-up (mock)
   assert.equal((await fetch(`${base}/v1/advertisers/me/listings/${other}/bid`, { method: "PUT", headers: B, body: JSON.stringify({ bid_atomic: 10 }) })).status, 403);
   assert.equal((await fetch(`${base}/v1/advertisers/me/topup?amount_atomic=5000`, { method: "POST", headers: B })).status, 402);
   const b0 = await balance("adv:brow");
-  const pay = { ...B, "X-PAYMENT": "mock:topup" + Date.now() };
+  const pay = { ...B, "X-TOS-ACCEPT": TOSA, "X-PAYMENT": "mock:topup" + Date.now() };
   const t = await (await fetch(`${base}/v1/advertisers/me/topup?amount_atomic=5000`, { method: "POST", headers: pay })).json();
   assert.equal(t.credited_atomic, 5000); assert.equal(await balance("adv:brow"), b0 + 5000);
   assert.equal((await fetch(`${base}/v1/advertisers/me/topup?amount_atomic=5000`, { method: "POST", headers: pay })).status, 409);

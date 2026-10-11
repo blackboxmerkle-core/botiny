@@ -1,3 +1,5 @@
+import { tosHashOf, DEFAULT_TOS } from "../../api/src/tos";
+const TOSH = tosHashOf(DEFAULT_TOS.bot);
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -107,7 +109,7 @@ test("free 402 probe: one unpaid request, decodes challenge, never sends a payme
 });
 
 test("publishing appends listings (with source URL + licence) without breaking replay of earlier requests", async () => {
-  const pay = (id: string, query: string) => fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json", "X-PAYMENT": "mock:" + id }, body: JSON.stringify({ query, k: 5 }) }).then(r => r.json());
+  const pay = (id: string, query: string) => fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json", "X-TOS-ACCEPT": TOSH, "X-PAYMENT": "mock:" + id }, body: JSON.stringify({ query, k: 5 }) }).then(r => r.json());
   const before = await pay("cr-before-" + Date.now(), "weather forecast api for agents");
   const seedCount = (await q("SELECT count(*)::int n FROM listings"))[0].n;
   await upsertItem(item({ source_key: "pub-1", name: "Zephyr Weather Forecast API", summary: "Hourly weather forecast API for agents, pay per call with x402", domain: "zephyr.test",

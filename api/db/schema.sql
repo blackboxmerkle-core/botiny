@@ -124,3 +124,33 @@ ALTER TABLE requests ADD COLUMN IF NOT EXISTS settle_error TEXT;
 -- provenance for crawled listings (crawler/)
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS licence_class TEXT;
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS crawl_item_id TEXT;
+
+-- ---- Own facilitator (EIP-3009) + multi-chain + ToS binding ----
+CREATE TABLE IF NOT EXISTS payment_nonces (        -- replay guard (also checked on-chain via authorizationState)
+  chain_id   INT  NOT NULL,
+  payer      TEXT NOT NULL,
+  nonce      TEXT NOT NULL,
+  payment_ref TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (chain_id, payer, nonce)
+);
+CREATE TABLE IF NOT EXISTS tos_versions (          -- append-only; each admin edit = new version
+  kind       TEXT NOT NULL,                        -- bot | advertiser
+  version    INT  NOT NULL,
+  body       TEXT NOT NULL,
+  sha256     TEXT NOT NULL,                        -- 0x-prefixed sha256 of body (utf8)
+  note       TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (kind, version)
+);
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS payment_chain_id INT;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS settle_via TEXT;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS tos_version INT;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS tos_hash TEXT;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS tos_proof JSONB;
+ALTER TABLE balance_ledger ADD COLUMN IF NOT EXISTS payment_network TEXT;
+ALTER TABLE balance_ledger ADD COLUMN IF NOT EXISTS payment_chain_id INT;
+ALTER TABLE balance_ledger ADD COLUMN IF NOT EXISTS settle_via TEXT;
+ALTER TABLE balance_ledger ADD COLUMN IF NOT EXISTS tos_version INT;
+ALTER TABLE balance_ledger ADD COLUMN IF NOT EXISTS tos_hash TEXT;
+ALTER TABLE balance_ledger ADD COLUMN IF NOT EXISTS tos_proof JSONB;

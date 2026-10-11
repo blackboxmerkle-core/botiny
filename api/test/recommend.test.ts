@@ -1,3 +1,5 @@
+import { tosHashOf, DEFAULT_TOS } from "../src/tos";
+const TOSH = tosHashOf(DEFAULT_TOS.bot), TOSA = tosHashOf(DEFAULT_TOS.advertiser);
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
@@ -33,7 +35,7 @@ test("unpaid recommend returns 402 with Base Sepolia USDC requirements", async (
 test("paid recommend logs request + response hash + impressions atomically, and replay matches", async () => {
   const pr = await post("/v1/listings", { provider_id: "adv:acme", name: "Acme x402 transcription", description: "Speech to text transcription API payable with x402 USDC.", address: "https://acme.example/stt", cpi_micro_usdc: 250, tags: ["x402", "audio"] });
   assert.equal(pr.status, 201);
-  const r = await post("/v1/recommend", { query: "x402 payments facilitator to settle USDC", k: 5 }, { "X-PAYMENT": "mock:" + nonce() });
+  const r = await post("/v1/recommend", { query: "x402 payments facilitator to settle USDC", k: 5 }, { "X-TOS-ACCEPT": TOSH, "X-PAYMENT": "mock:" + nonce() });
   assert.equal(r.status, 200);
   const j = await r.json();
   assert.ok(j.response.results.length > 0);
@@ -52,7 +54,7 @@ test("paid recommend logs request + response hash + impressions atomically, and 
   const rp = await (await fetch(`${base}/v1/requests/${j.request_id}/replay`)).json();
   assert.equal(rp.match, true); assert.equal(rp.replayed_hash, j.response_hash); assert.equal(rp.request_hash_ok, true);
   // a fresh request now sees the new listing and yields a different hash
-  const j2 = await (await post("/v1/recommend", { query: "x402 payments facilitator to settle USDC", k: 5 }, { "X-PAYMENT": "mock:" + nonce() })).json();
+  const j2 = await (await post("/v1/recommend", { query: "x402 payments facilitator to settle USDC", k: 5 }, { "X-TOS-ACCEPT": TOSH, "X-PAYMENT": "mock:" + nonce() })).json();
   assert.notEqual(j2.response_hash, j.response_hash);
 });
 
@@ -60,7 +62,7 @@ test("failure mid-transaction leaves no request and no impressions", async () =>
   const before = Number((await pool.query("SELECT count(*) FROM impressions")).rows[0].count);
   const rbefore = Number((await pool.query("SELECT count(*) FROM requests")).rows[0].count);
   process.env.FAIL_AFTER_IMPRESSIONS = "1";
-  const r = await post("/v1/recommend", { query: "browser automation" }, { "X-PAYMENT": "mock:" + nonce() });
+  const r = await post("/v1/recommend", { query: "browser automation" }, { "X-TOS-ACCEPT": TOSH, "X-PAYMENT": "mock:" + nonce() });
   delete process.env.FAIL_AFTER_IMPRESSIONS;
   assert.equal(r.status, 500);
   assert.equal(Number((await pool.query("SELECT count(*) FROM impressions")).rows[0].count), before);
@@ -68,13 +70,13 @@ test("failure mid-transaction leaves no request and no impressions", async () =>
 });
 
 test("payment header cannot be reused", async () => {
-  const h = { "X-PAYMENT": "mock:" + nonce() };
+  const h = { "X-TOS-ACCEPT": TOSH, "X-PAYMENT": "mock:" + nonce() };
   assert.equal((await post("/v1/recommend", { query: "github issues" }, h)).status, 200);
   assert.equal((await post("/v1/recommend", { query: "github issues" }, h)).status, 409);
 });
 
 test("audit endpoints expose request impressions and provider spend", async () => {
-  const j = await (await post("/v1/recommend", { query: "Acme transcription speech to text x402", k: 3 }, { "X-PAYMENT": "mock:" + nonce() })).json();
+  const j = await (await post("/v1/recommend", { query: "Acme transcription speech to text x402", k: 3 }, { "X-TOS-ACCEPT": TOSH, "X-PAYMENT": "mock:" + nonce() })).json();
   const a = await (await fetch(`${base}/v1/requests/${j.request_id}`)).json();
   assert.equal(a.impressions.length, j.response.results.length);
   const sp = await (await fetch(`${base}/v1/audit/providers/adv:acme`, { headers: AUTH })).json();

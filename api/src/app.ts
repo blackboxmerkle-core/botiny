@@ -7,7 +7,10 @@ import { EMBEDDING_MODEL } from "./embed";
 import { sha256 } from "./canonical";
 import { apiLogger, dashboardRouter } from "./dashboard";
 import { basicAuth } from "./auth";
-import { verifyPayment, settlePayment, requirements, MODE, NETWORK } from "./payment";
+import { verifyPayment, settlePayment, accepts, reserveNonce, peekNonce, MODE, PAY_TO } from "./payment";
+import { tosInfo, checkTos, currentTos, tosVersion, TosKind } from "./tos";
+import { publicChains } from "./chains";
+import { activeChains, relayerAddress } from "./relayer";
 import { currentSettings } from "./settings";
 import { MARKET_LOCK, marketSeq, assertNonNegative, advertiserByKey, advertiserSummary, setBid, credit } from "./market";
 
@@ -21,7 +24,21 @@ export function createApp() {
   app.use(express.json({ limit: "64kb" }));
   app.use(apiLogger());
   app.use("/dashboard", basicAuth(), dashboardRouter()); // HTTP basic auth (admin / DASHBOARD_PASSWORD)
-  app.get("/v1/health", (_q, r) => r.json({ ok: true, payment_mode: MODE, network: NETWORK }));
+  app.get("/v1/health", async (_q, r) => {
+    const act = MODE === "mock" ? [] : await activeChains().catch(() => []);
+    r.json({ ok: true, payment_mode: MODE, network: MODE === "mock" ? "mock" : act.map(a => a.chain.key).join(",") || "none", settlement: MODE === "mock" ? "mock" : "own-facilitator",
+      chains: act.map(a => ({ network: a.chain.key, caip2: a.chain.caip2, settle_via: a.settle_via })), pay_to: PAY_TO, relayer: relayerAddress() });
+  });
+  app.get("/v1/chains", async (_q, r) => r.json({ chains: publicChains(), active: MODE === "mock" ? [] : (await activeChains()).map(a => ({ network: a.chain.key, settle_via: a.settle_via })) }));
+  // Versioned Terms of Service (DRAFT placeholder). /v1/terms/:version = bot ToS; /v1/terms/advertiser/:version
+  const sendTos = async (kind: TosKind, v: string, res: express.Response) => {
+    const t = v === "current" ? await currentTos(kind) : await tosVersion(kind, Number(v));
+    if (!t) return res.status(404).json({ error: "no such ToS version" });
+    res.set("X-TOS-SHA256", t.sha256).set("X-TOS-VERSION", String(t.version)).type("text/plain; charset=utf-8").send(t.body);
+  };
+  app.get("/v1/terms", async (req, res) => res.json({ bot: await tosInfo("bot", publicBase(req)), advertiser: await tosInfo("advertiser", publicBase(req)) }));
+  app.get("/v1/terms/advertiser/:version", (req, res) => sendTos("advertiser", String(req.params.version), res));
+  app.get("/v1/terms/:version", (req, res) => sendTos("bot", String(req.params.version), res));
 
   app.post("/v1/listings", basicAuth(), async (req, res) => {
     const err = validateListing(req.body); if (err) return res.status(400).json({ error: err });
@@ -31,13 +48,11 @@ export function createApp() {
   app.post("/v1/recommend", async (req, res) => {
     const inp = normalizeInput(req.body);
     if (typeof inp === "string") return res.status(400).json({ error: inp });
-    const resource = `${publicBase(req)}/v1/recommend`;
     const { version: settings_version, settings } = await currentSettings();   // price + ranking rules pinned here
     const price = BigInt(settings.query_price_atomic);
-    const header = req.get("X-PAYMENT");
-    if (!header) return res.status(402).json({ x402Version: 1, error: "X-PAYMENT header is required", accepts: [requirements(resource, price)] });
-    const pay = await verifyPayment(header, resource, price);
-    if ("error" in pay) { res.locals.error = pay.error; return res.status(402).json({ x402Version: 1, error: pay.error, accepts: [requirements(resource, price)] }); }
+    const g = await paymentGate(req, res, "bot", "/v1/recommend", req.body, price, "Ranked bot-service recommendations");
+    if (!g) return;
+    const { pay, tos } = g;
 
     // ONE transaction (serialized by MARKET_LOCK): pin catalogue/market/settings, rank, log request + hash +
     // impressions, debit advertisers for sponsored impressions, assert no negative balance.
@@ -54,10 +69,13 @@ export function createApp() {
       out = await rank(client, { ...inp, catalogue_seq: seq, market_seq: mseq, settings_version, embedding_model: EMBEDDING_MODEL, ranker_version: RANKER_VERSION });
       await client.query(
         `INSERT INTO requests(request_id,catalogue_seq,embedding_model,ranker_version,request_canonical,request_hash,
-           response_canonical,response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_ref,payment_status,bot_id,settings_version,market_seq)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'verified',$14,$15,$16)`,
+           response_canonical,response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_ref,payment_status,bot_id,settings_version,market_seq,
+           payment_chain_id,settle_via,tos_version,tos_hash,tos_proof)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'verified',$14,$15,$16,$17,$18,$19,$20,$21)`,
         [request_id, seq, EMBEDDING_MODEL, RANKER_VERSION, reqCanon, sha256(reqCanon), out.canonical, out.hash,
-         pay.payer, pay.mode, NETWORK, pay.amount.toString(), pay.ref, botId(req), settings_version, mseq]);
+         pay.payer, pay.mode, pay.network, pay.amount.toString(), pay.ref, botId(req), settings_version, mseq,
+         pay.chainId, pay.settle_via, tos.tos_version, tos.tos_hash, tos.proof]);
+      await reserveNonce(client, pay);   // same tx: replayed EIP-3009 nonce => 23505 => 409
       const debited: string[] = [];
       for (let i = 0; i < out.meta.length; i++) {
         const m = out.meta[i];
@@ -80,12 +98,12 @@ export function createApp() {
     } finally { client.release(); }
 
     const s = await settlePayment(pay).catch((e: any) => ({ ok: false, error: "exception: " + String(e?.shortMessage ?? e?.message ?? e).slice(0, 480) } as any));
-    await pool.query("UPDATE requests SET payment_status=$2, settle_tx=$3, settle_error=$4 WHERE request_id=$1",
-      [request_id, s.ok ? "settled" : "settle_failed", s.tx ?? null, s.ok ? null : (s.error ?? "unknown")]);
+    await pool.query("UPDATE requests SET payment_status=$2, settle_tx=$3, settle_error=$4, settle_via=$5 WHERE request_id=$1",
+      [request_id, s.ok ? "settled" : "settle_failed", s.tx ?? null, s.ok ? null : (s.error ?? "unknown"), s.via ?? pay.settle_via]);
     if (!s.ok) res.locals.error = "settlement failed: " + (s.error ?? "unknown");
     if (s.header) res.set("X-PAYMENT-RESPONSE", s.header);
     if (!s.ok) return res.status(402).json({ error: "settlement failed", reason: s.error ?? "unknown", request_id });
-    res.json({ request_id, response_hash: out.hash, response: out.body });
+    res.json({ request_id, response_hash: out.hash, response: out.body, payment: { network: pay.network, settle_tx: s.tx ?? null, settle_via: s.via }, tos: { version: tos.tos_version, sha256: tos.tos_hash, proof: tos.proof } });
   });
 
   app.get("/v1/requests/:id/replay", async (req, res) => {
@@ -97,13 +115,14 @@ export function createApp() {
         market_seq: r.market_seq == null ? undefined : Number(r.market_seq), settings_version: r.settings_version ?? undefined });
       res.json({ request_id: r.request_id, logged_hash: r.response_hash, replayed_hash: out.hash, match: out.hash === r.response_hash,
         request_hash_ok: sha256(r.request_canonical) === r.request_hash, catalogue_seq: Number(r.catalogue_seq),
-        market_seq: r.market_seq == null ? null : Number(r.market_seq), settings_version: r.settings_version, ranker_version: r.ranker_version });
+        market_seq: r.market_seq == null ? null : Number(r.market_seq), settings_version: r.settings_version, ranker_version: r.ranker_version,
+        tos: r.tos_version == null ? null : { version: r.tos_version, sha256: r.tos_hash, proof: r.tos_proof }, payment: { network: r.payment_network, chain_id: r.payment_chain_id, settle_tx: r.settle_tx, settle_via: r.settle_via } });
     } catch (e: any) { res.status(409).json({ error: String(e.message) }); }
   });
 
   app.get("/v1/requests/:id", async (req, res) => {
     const r = (await pool.query(`SELECT request_id,received_at,catalogue_seq,market_seq,settings_version,embedding_model,ranker_version,request_canonical,request_hash,
-      response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_status,settle_tx,settle_error,db_txid,bot_id FROM requests WHERE request_id=$1`, [req.params.id])).rows[0];
+      response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_status,settle_tx,settle_error,db_txid,bot_id,payment_chain_id,settle_via,tos_version,tos_hash,tos_proof FROM requests WHERE request_id=$1`, [req.params.id])).rows[0];
     if (!r) return res.status(404).json({ error: "not found" });
     const imp = (await pool.query("SELECT rank,listing_id,provider_id,sponsored,fixed_atomic,bid_atomic,charge_micro_usdc FROM impressions WHERE request_id=$1 ORDER BY rank", [req.params.id])).rows;
     res.json({ ...r, impressions: imp });
@@ -129,20 +148,39 @@ export function createApp() {
   app.post("/v1/advertisers/me/topup", advAuth, async (req, res) => {
     const amt = Number(req.query.amount_atomic ?? req.body?.amount_atomic);
     if (!Number.isSafeInteger(amt) || amt < TOPUP_MIN || amt > TOPUP_MAX) return res.status(400).json({ error: `amount_atomic must be ${TOPUP_MIN}..${TOPUP_MAX}` });
-    const resource = `${publicBase(req)}/v1/advertisers/me/topup`, desc = `Prepaid advertiser balance top-up (${res.locals.adv})`;
-    const header = req.get("X-PAYMENT");
-    if (!header) return res.status(402).json({ x402Version: 1, error: "X-PAYMENT header is required", accepts: [requirements(resource, BigInt(amt), desc)] });
-    const pay = await verifyPayment(header, resource, BigInt(amt), desc);
-    if ("error" in pay) { res.locals.error = pay.error; return res.status(402).json({ x402Version: 1, error: pay.error, accepts: [requirements(resource, BigInt(amt), desc)] }); }
+    const desc = `Prepaid advertiser balance top-up (${res.locals.adv})`;
+    const g = await paymentGate(req, res, "advertiser", "/v1/advertisers/me/topup", { advertiser_id: res.locals.adv, amount_atomic: amt }, BigInt(amt), desc);
+    if (!g) return;
+    const { pay, tos } = g;
     const dup = (await pool.query("SELECT 1 FROM balance_ledger WHERE payment_ref=$1", [pay.ref])).rows.length;
     if (dup) return res.status(409).json({ error: "payment already used" });
+    try { await reserveNonce(pool, pay); } catch (e: any) { if (e?.code === "23505") return res.status(409).json({ error: "payment already used (nonce)" }); throw e; }
     const s = await settlePayment(pay).catch((e: any) => ({ ok: false, error: "exception: " + String(e?.message ?? e).slice(0, 480) } as any));
     if (!s.ok) { res.locals.error = "settlement failed: " + (s.error ?? "unknown"); return res.status(402).json({ error: "settlement failed; balance not credited", reason: s.error ?? "unknown" }); }
     if (s.header) res.set("X-PAYMENT-RESPONSE", s.header);
     try {
-      const c = await credit(res.locals.adv, amt, "topup_x402", { settle_tx: s.tx, payment_ref: pay.ref, payer: pay.payer, note: pay.mode });
-      res.json({ advertiser_id: res.locals.adv, credited_atomic: amt, settle_tx: s.tx, mode: pay.mode, ...c });
+      const c = await credit(res.locals.adv, amt, "topup_x402", { settle_tx: s.tx, payment_ref: pay.ref, payer: pay.payer, note: pay.mode,
+        payment_network: pay.network, payment_chain_id: pay.chainId, settle_via: s.via, tos_version: tos.tos_version, tos_hash: tos.tos_hash, tos_proof: tos.proof });
+      res.json({ advertiser_id: res.locals.adv, credited_atomic: amt, settle_tx: s.tx, mode: pay.mode, network: pay.network, settle_via: s.via, tos: { version: tos.tos_version, sha256: tos.tos_hash }, ...c });
     } catch (e) { fail(res, e); }
   });
   return app;
+}
+
+/** x402 + ToS gate: 402 with accepts (one per active EVM chain) + ToS; ToS acceptance must be bound into the EIP-3009 nonce. */
+async function paymentGate(req: express.Request, res: express.Response, kind: TosKind, route: string, params: unknown, amount: bigint, description: string) {
+  const base = publicBase(req);
+  const tos = await tosInfo(kind, base);
+  const acc = await accepts(base + route, amount, description, tos);
+  const fail = (error: string) => { res.locals.error = error; res.status(402).json({ x402Version: 1, error, accepts: acc, tos }); return null; };
+  if (!acc.length) return fail("no payment network currently available (relayer has no gas on any enabled chain)");
+  const header = req.get("X-PAYMENT");
+  if (!header) return fail("X-PAYMENT header is required (and ToS acceptance: X-TOS-ACCEPT + X-TOS-SALT bound into the nonce)");
+  const nonce = MODE === "mock" ? null : peekNonce(header);
+  if (MODE !== "mock" && !nonce) return fail("malformed X-PAYMENT (expected base64 JSON x402 'exact' EVM payload)");
+  const t = await checkTos(kind, { accept: req.get("X-TOS-ACCEPT"), salt: req.get("X-TOS-SALT") }, route, params, nonce);
+  if (!t.ok) return fail(t.reason);
+  const pay = await verifyPayment(header, acc, amount);
+  if ("error" in pay) return fail(pay.error);
+  return { pay, tos: t };
 }

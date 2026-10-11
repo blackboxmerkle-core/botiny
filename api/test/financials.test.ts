@@ -1,3 +1,5 @@
+import { tosHashOf, DEFAULT_TOS } from "../src/tos";
+const TOSH = tosHashOf(DEFAULT_TOS.bot), TOSA = tosHashOf(DEFAULT_TOS.advertiser);
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
@@ -18,7 +20,7 @@ test("financials API: totals, ledger, liability, distributions, filters, CSV, au
   await A("/advertisers/adv:fin/credit", { amount_atomic: 5000 });
   await A("/listings/" + lst.listing_id, { bid_atomic: 300 });
   const before = await (await fetch(base + "/dashboard/api/financials", { headers: AUTH })).json();
-  const rec = await (await fetch(base + "/v1/recommend", { method: "POST", headers: { ...H, "X-PAYMENT": "mock:fin" + Date.now() + ":0x00000000000000000000000000000000000000f1" }, body: JSON.stringify({ query: "ledger reconciliation accounting", k: 3 }) })).json();
+  const rec = await (await fetch(base + "/v1/recommend", { method: "POST", headers: { ...H, "X-TOS-ACCEPT": TOSH, "X-PAYMENT": "mock:fin" + Date.now() + ":0x00000000000000000000000000000000000000f1" }, body: JSON.stringify({ query: "ledger reconciliation accounting", k: 3 }) })).json();
   assert.equal(rec.response.results[0].name, "Fin ledger reconciliation API");
   assert.equal(rec.response.results[0].sponsored, true);
   const f = await (await fetch(base + "/dashboard/api/financials", { headers: AUTH })).json();
@@ -48,9 +50,9 @@ test("financials API: totals, ledger, liability, distributions, filters, CSV, au
 });
 
 test("per-bot attribution: X-Bot-Id recorded and filterable in usage + financials", async () => {
-  const mk = (bot: string, n: string) => fetch(base + "/v1/recommend", { method: "POST", headers: { ...H, "X-Bot-Id": bot, "X-PAYMENT": "mock:" + n + Date.now() }, body: JSON.stringify({ query: "mcp server github", k: 2 }) }).then(r => r.json());
+  const mk = (bot: string, n: string) => fetch(base + "/v1/recommend", { method: "POST", headers: { ...H, "X-Bot-Id": bot, "X-TOS-ACCEPT": TOSH, "X-PAYMENT": "mock:" + n + Date.now() }, body: JSON.stringify({ query: "mcp server github", k: 2 }) }).then(r => r.json());
   const a = await mk("research-bot", "a"), b = await mk("dev-bot", "b");
-  await fetch(base + "/v1/recommend", { method: "POST", headers: { ...H, "X-Bot-Id": "bad id!", "X-PAYMENT": "mock:c" + Date.now() }, body: JSON.stringify({ query: "x" }) });
+  await fetch(base + "/v1/recommend", { method: "POST", headers: { ...H, "X-Bot-Id": "bad id!", "X-TOS-ACCEPT": TOSH, "X-PAYMENT": "mock:c" + Date.now() }, body: JSON.stringify({ query: "x" }) });
   await new Promise(r => setTimeout(r, 150));
   const rows = (await pool.query("SELECT request_id, bot_id FROM requests WHERE request_id = ANY($1)", [[a.request_id, b.request_id]])).rows;
   assert.deepEqual(Object.fromEntries(rows.map(r => [r.request_id, r.bot_id])), { [a.request_id]: "research-bot", [b.request_id]: "dev-bot" });

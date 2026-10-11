@@ -5,7 +5,7 @@ export const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL ?? 
 export async function migrate() {
   await pool.query(readFileSync(join(__dirname, "..", "db", "schema.sql"), "utf8"));
 }
-export async function migrateAll() { await migrate(); await migrateCrawlerSchema(); const { ensureSettings } = await import("./settings"); await ensureSettings(); }
+export async function migrateAll() { await migrate(); await migrateCrawlerSchema(); const { ensureSettings } = await import("./settings"); await ensureSettings(); const { ensureTos } = await import("./tos"); await ensureTos(); }
 /** Crawler tables live in the same database; the dashboard reads them, so apply the crawler schema too (idempotent). */
 export async function migrateCrawlerSchema() {
   const p = join(__dirname, "..", "..", "crawler", "db", "schema.sql");

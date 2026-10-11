@@ -1,17 +1,14 @@
-// One paid POST /v1/recommend on Base Sepolia (testnet only). Key read from PAYER_PRIVATE_KEY; never printed.
-import { createWalletClient, http, publicActions } from "viem";
+// One paid POST /v1/recommend (testnet only) via our own x402 client, accepting the bot ToS (hash bound into the EIP-3009 nonce).
+// Key read from PAYER_PRIVATE_KEY; never printed. PAY_NETWORK selects the chain (default base-sepolia).
 import { privateKeyToAccount } from "viem/accounts";
-import { baseSepolia } from "viem/chains";
-import { wrapFetchWithPayment, decodeXPaymentResponse } from "x402-fetch";
+import { paidFetch } from "../src/payclient";
 const raw = process.env.PAYER_PRIVATE_KEY; if (!raw) throw new Error("PAYER_PRIVATE_KEY not set");
 const account = privateKeyToAccount((raw.startsWith("0x") ? raw : "0x" + raw) as `0x${string}`);
-const wallet = createWalletClient({ account, chain: baseSepolia, transport: http("https://sepolia.base.org") }).extend(publicActions);
-if (wallet.chain.id !== 84532) throw new Error("refusing: not Base Sepolia");
 const url = process.env.API_URL ?? "http://localhost:8402/v1/recommend";
-const pay = wrapFetchWithPayment(fetch, wallet as any, BigInt(10000)); // max 0.01 USDC
 (async () => {
-  const r = await pay(url, { method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ query: process.argv[2] ?? "x402 facilitator to settle USDC payments", k: 3 }) });
-  const xpr = r.headers.get("x-payment-response");
-  console.log(JSON.stringify({ status: r.status, payer: account.address, payment_response: xpr ? decodeXPaymentResponse(xpr) : null, body: await r.json() }, null, 2));
+  const params = { query: process.argv[2] ?? "x402 facilitator to settle USDC payments", k: 3 };
+  const r = await paidFetch(url, "/v1/recommend", params, JSON.stringify(params), { account, networks: [process.env.PAY_NETWORK ?? "base-sepolia"], maxAmount: 10_000n });
+  const xpr = r.res.headers.get("x-payment-response");
+  console.log(JSON.stringify({ status: r.res.status, payer: account.address, network: r.paid ? r.accept.network : null, tos: r.paid ? r.tos : null,
+    payment_response: xpr ? JSON.parse(Buffer.from(xpr, "base64").toString("utf8")) : null, body: await r.res.json() }, null, 2));
 })();

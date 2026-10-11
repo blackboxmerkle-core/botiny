@@ -57,25 +57,18 @@ export function adminRouter() {
       let r2: Response;
       if (MODE === "mock") {
         init.headers["X-PAYMENT"] = `mock:try${Date.now()}${Math.floor(Math.random() * 1e6)}`;
+        init.headers["X-TOS-ACCEPT"] = (await (await import("./tos")).currentTos("bot")).sha256;
         r2 = await fetch(url, init);
       } else {
         const raw = process.env.PAYER_PRIVATE_KEY;
         if (!raw) return res.status(503).json({ error: "PAYER_PRIVATE_KEY not configured on the server" });
-        const { createWalletClient, http, publicActions } = await import("viem");
         const { privateKeyToAccount } = await import("viem/accounts");
-        const { baseSepolia } = await import("viem/chains");
-        const { wrapFetchWithPayment } = await import("x402-fetch");
+        const { paidFetch } = await import("./payclient");
         const account = privateKeyToAccount((raw.startsWith("0x") ? raw : "0x" + raw) as `0x${string}`);
-        const wallet = createWalletClient({ account, chain: baseSepolia, transport: http("https://sepolia.base.org") }).extend(publicActions);
-        if (wallet.chain.id !== 84532) return res.status(500).json({ error: "refusing: not Base Sepolia" });
-        const selector = (reqs: any[]) => {
-          const x = reqs.find(x => x.scheme === "exact" && x.network === "base-sepolia" && x.asset?.toLowerCase() === USDC.toLowerCase() && BigInt(x.maxAmountRequired) <= 10_000n);
-          if (!x) throw new Error("no acceptable testnet requirement (≤0.01 USDC)"); return x;
-        };
-        r2 = await wrapFetchWithPayment(fetch, wallet as any, 10_000n, selector as any)(url, init);
+        r2 = (await paidFetch(url, "/v1/recommend", { query, k }, init.body, { account, networks: ["base-sepolia"], maxAmount: 10_000n, headers: { "X-Bot-Id": bot } })).res;
       }
       const body: any = await r2.json().catch(() => ({}));
-      const row = body.request_id ? (await q(`SELECT payment_amount_atomic::text amount_atomic, payment_status, settle_tx, payer, payment_mode FROM requests WHERE request_id=$1`, [body.request_id]))[0] : null;
+      const row = body.request_id ? (await q(`SELECT payment_amount_atomic::text amount_atomic, payment_status, settle_tx, payer, payment_mode, payment_network, settle_via, tos_version, tos_hash FROM requests WHERE request_id=$1`, [body.request_id]))[0] : null;
       res.status(r2.status === 200 ? 200 : 502).json({ status: r2.status, bot_id: bot, ...body, payment: row });
     } catch (e: any) { res.status(502).json({ error: String(e?.shortMessage ?? e?.message ?? e).slice(0, 300) }); }
   });
@@ -87,5 +80,15 @@ export function adminRouter() {
        FROM requests r WHERE r.bot_id=$1${pg.where} ORDER BY r.received_at DESC, r.request_id DESC LIMIT ${pg.limit}`, [req.params.bot, ...pg.params]);
     if (rows.length === pg.limit) res.set("X-Next-Before", new Date(rows[rows.length - 1].received_at).toISOString());
     res.json(rows); });
+  // ---------- Terms of Service (DRAFT placeholder; each save = new version) ----------
+  r.get("/api/admin/tos", async (_q2, res) => {
+    const { currentTos, tosHistory } = await import("./tos");
+    res.json({ bot: { current: await currentTos("bot"), history: await tosHistory("bot") }, advertiser: { current: await currentTos("advertiser"), history: await tosHistory("advertiser") } });
+  });
+  r.post("/api/admin/tos", async (req, res) => {
+    const { saveTos } = await import("./tos");
+    const kind = req.body?.kind; if (kind !== "bot" && kind !== "advertiser") return res.status(400).json({ error: "kind must be bot|advertiser" });
+    try { res.json(await saveTos(kind, String(req.body?.body ?? ""), req.body?.note ?? null)); } catch (e) { fail(res, e); }
+  });
   return r;
 }

@@ -1,13 +1,15 @@
 import { createPublicClient, http, erc20Abi, formatUnits, parseAbiItem } from "viem";
 import { baseSepolia } from "viem/chains";
 import { USDC_BASE_SEPOLIA } from "./payment";
+import { chainFor } from "./chains";
 export const PAYEE = (process.env.PAY_TO_ADDRESS || "0x0e66433540a91D9683E939c8Ac17BC084571D050") as `0x${string}`;
 export const PAYER = (process.env.PAYER_ADDRESS || "0x0b68c3ecBB5DC0E79a4399eE7eA43d07Cb9A5402") as `0x${string}`; // public address only
 const client = createPublicClient({ chain: baseSepolia, transport: http(process.env.BASE_SEPOLIA_RPC ?? "https://sepolia.base.org") });
 let cache: { at: number; data: any } | null = null;
 // Final receipt statuses never change: cache forever. 'not_found' is retried.
 const receiptCache = new Map<string, string>();
-export async function chainView(txs: string[]) {
+export type TxRef = string | { tx: string; network?: string | null };
+export async function chainView(txs: TxRef[]) {
   const fresh = cache && Date.now() - cache.at < 30000;
   if (fresh) { await fillReceipts(txs); return { ...cache!.data, receipts: Object.fromEntries(receiptCache) }; }
   const bal = (a: `0x${string}`) => client.readContract({ address: USDC_BASE_SEPOLIA as `0x${string}`, abi: erc20Abi, functionName: "balanceOf", args: [a] });
@@ -32,11 +34,20 @@ export async function chainView(txs: string[]) {
   return out;
 }
 
-async function fillReceipts(txs: string[]) {
-  const todo = [...new Set(txs.filter(t => /^0x[0-9a-fA-F]{64}$/.test(t) && (receiptCache.get(t) ?? "not_found") === "not_found"))];
+const clients = new Map<string, any>();
+function clientFor(network: string) {
+  if (network === "base-sepolia") return client;
+  if (!clients.has(network)) { const c = chainFor(network); clients.set(network, c ? createPublicClient({ transport: http(c.rpc, { timeout: 15000 }) }) : null); }
+  return clients.get(network);
+}
+async function fillReceipts(txs: TxRef[]) {
+  const refs = txs.map(t => typeof t === "string" ? { tx: t, network: "base-sepolia" } : { tx: t.tx, network: t.network || "base-sepolia" });
+  const seen = new Set<string>();
+  const todo = refs.filter(r => /^0x[0-9a-fA-F]{64}$/.test(r.tx) && (receiptCache.get(r.tx) ?? "not_found") === "not_found" && !seen.has(r.tx) && seen.add(r.tx));
   for (let i = 0; i < todo.length; i += 8) {
-    await Promise.all(todo.slice(i, i + 8).map(async t => {
-      try { receiptCache.set(t, (await client.getTransactionReceipt({ hash: t as `0x${string}` })).status); } catch { receiptCache.set(t, "not_found"); }
+    await Promise.all(todo.slice(i, i + 8).map(async r => {
+      const c = clientFor(r.network); if (!c) { receiptCache.set(r.tx, "unknown_chain"); return; }
+      try { receiptCache.set(r.tx, (await c.getTransactionReceipt({ hash: r.tx as `0x${string}` })).status); } catch { receiptCache.set(r.tx, "not_found"); }
     }));
   }
 }

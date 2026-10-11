@@ -58,20 +58,24 @@ export function dashboardRouter() {
   r.get("/api/payments", async (req, res) => {
     const pg = pageArgs(req.query);
     const pays = await q(`SELECT request_id, received_at, payer, payment_mode, payment_network, payment_amount_atomic::text AS amount_atomic,
-      payment_status, settle_tx, settle_error, bot_id FROM requests r WHERE true${pg.where} ORDER BY received_at DESC, request_id DESC LIMIT ${pg.limit}`, pg.params);
+      payment_status, settle_tx, settle_error, bot_id, settle_via, tos_version FROM requests r WHERE true${pg.where} ORDER BY received_at DESC, request_id DESC LIMIT ${pg.limit}`, pg.params);
     const totals = await q(`SELECT payment_mode, payment_status, count(*)::int AS n, sum(payment_amount_atomic)::text AS atomic FROM requests GROUP BY 1,2 ORDER BY 1,2`);
     res.json({ payments: pays, totals, next_before: nextBefore(pays, pg.limit), total_count: (await q(`SELECT count(*)::int n FROM requests`))[0].n });
   });
   r.get("/api/chain", async (_q2, res) => {
-    const settled = await q(`SELECT request_id, settle_tx FROM requests WHERE payment_mode='x402' AND payment_status='settled'`);
-    const chain = await chainView(settled.map(s => s.settle_tx).filter(Boolean));
+    const settled = await q(`SELECT request_id, settle_tx, payment_network, settle_via FROM requests WHERE payment_mode='x402' AND payment_status='settled'`);
+    const chain = await chainView(settled.filter(s => s.settle_tx).map(s => ({ tx: s.settle_tx, network: s.payment_network })));
     const seen = new Set(chain.transfers.map((t: any) => String(t.tx).toLowerCase()));
     const reconciliation = settled.map(s => {
       const rc = s.settle_tx ? chain.receipts[s.settle_tx] : undefined;
       const ok = rc === "success" || seen.has(String(s.settle_tx).toLowerCase());
-      return { request_id: s.request_id, settle_tx: s.settle_tx, receipt: rc ?? "no_tx", confirmed: ok };
+      return { request_id: s.request_id, settle_tx: s.settle_tx, network: s.payment_network, settle_via: s.settle_via, receipt: rc ?? "no_tx", confirmed: ok };
     });
-    res.json({ ...chain, reconciliation, unconfirmed: reconciliation.filter(r => !r.confirmed).length });
+    const by_chain = await q(`SELECT payment_network AS network, payment_mode AS mode, count(*)::int n, count(*) FILTER (WHERE payment_status='settled')::int settled,
+      count(*) FILTER (WHERE payment_status='settle_failed')::int failed, coalesce(sum(payment_amount_atomic) FILTER (WHERE payment_status='settled'),0)::text atomic,
+      count(*) FILTER (WHERE settle_via='self')::int via_self, count(*) FILTER (WHERE settle_via='facilitator-fallback')::int via_fallback
+      FROM requests GROUP BY 1,2 ORDER BY 3 DESC`);
+    res.json({ ...chain, reconciliation, by_chain, unconfirmed: reconciliation.filter(r => !r.confirmed).length });
   });
   r.get("/api/requests", async (req, res) => {
     const pg = pageArgs(req.query);
@@ -84,7 +88,8 @@ export function dashboardRouter() {
   });
   r.get("/api/requests/:id", async (req, res) => {
     const row = (await q(`SELECT request_id, received_at, catalogue_seq, embedding_model, ranker_version, request_canonical, request_hash,
-      response_canonical, response_hash, payer, payment_mode, payment_network, payment_amount_atomic::text AS amount_atomic, payment_status, settle_tx, settle_error, db_txid::text, bot_id, settings_version, market_seq::text
+      response_canonical, response_hash, payer, payment_mode, payment_network, payment_amount_atomic::text AS amount_atomic, payment_status, settle_tx, settle_error, db_txid::text, bot_id, settings_version, market_seq::text,
+      payment_chain_id, settle_via, tos_version, tos_hash, tos_proof
       FROM requests WHERE request_id=$1`, [req.params.id]))[0];
     if (!row) return res.status(404).json({ error: "not found" });
     const imps = await q(`SELECT i.rank, i.listing_id, i.provider_id, i.charge_micro_usdc::text AS charge, i.sponsored, i.fixed_atomic::text fixed, i.bid_atomic::text bid, i.db_txid::text, l.name
