@@ -42,7 +42,7 @@ export const DEFAULTS = Object.freeze({
   settleGraceMs: 3_600_000,    // wait after a line's last chance to accrue before refunding its escrow
   // bot-side request binding
   sigMaxSkewMs: 300_000,
-  allowUnsignedBotRequests: true, // legacy X-Bot-Wallet-only binding; such proofs are marked binding='header'
+  allowUnsignedBotRequests: false, // legacy X-Bot-Wallet-only binding; such proofs are marked binding='header'
 });
 
 /** Build config from defaults + overrides + optional env (CS_FEE=low|standard|<atomic>). */

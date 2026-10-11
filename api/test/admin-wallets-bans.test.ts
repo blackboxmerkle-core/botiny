@@ -99,3 +99,12 @@ test("bans: 403 before any 402/payment (wallet, IP/CIDR, bot id), counts blocked
   const au = Object.values(await adm("/api/admin/audit")) as any[];
   assert.ok(au.some(x => x?.action === "ban_create") && au.some(x => x?.action === "ban_revoke"));
 });
+
+test("IP ban uses the LAST X-Forwarded-For entry: spoofed leading entries can't evade or frame", async () => {
+  const b = await adm("/api/admin/bans", { kind: "ip", value: "203.0.113.0/24", reason: "xff test" });
+  assert.equal(b.status, 201);
+  assert.equal((await rec({ "X-Forwarded-For": "8.8.8.8, 203.0.113.7" })).status, 403, "spoofed leading entry does not evade");
+  assert.equal((await rec({ "X-Forwarded-For": "1.1.1.1,9.9.9.9 , 203.0.113.9" })).status, 403);
+  assert.equal((await rec({ "X-Forwarded-For": "203.0.113.7, 9.9.9.9" })).status, 200, "leading entry is ignored");
+  assert.equal((await adm(`/api/admin/bans/${b.ban_id}/revoke`, {})).status, 200);
+});

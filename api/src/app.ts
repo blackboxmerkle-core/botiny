@@ -166,7 +166,7 @@ export function createApp() {
       const h = makeHandler(engine, { enqueue: (ev: any) => scoreClick(ev).catch((e: any) => console.error("click score", e?.message)) });
       const trustCf = process.env.TRUST_CF_HEADER === "1";
       const headers = new Headers(); for (const [k, v] of Object.entries(req.headers)) if (typeof v === "string" && (trustCf || k !== "cf-connecting-ip")) headers.set(k, v);
-      // client IP: same rule as bans (first X-Forwarded-For hop from ngrok, else socket); cf-connecting-ip only if TRUST_CF_HEADER=1
+      // client IP: same rule as bans (LAST X-Forwarded-For entry, appended by ngrok, else socket); cf-connecting-ip only if TRUST_CF_HEADER=1
       const r: Response = await h(new Request("http://click.local" + path, { method: req.method, headers }), { clientIp: clientIp(req), trustCf }, { waitUntil: (p: Promise<any>) => p });
       res.status(r.status); r.headers.forEach((v, k) => res.set(k, v)); res.send(Buffer.from(await r.arrayBuffer()));
     } catch (e) { fail(res, e); }

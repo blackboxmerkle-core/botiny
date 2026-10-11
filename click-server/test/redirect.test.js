@@ -91,11 +91,11 @@ test('signed requests: bad signature, stale timestamp, replay, tampered body rej
   const raw2 = JSON.stringify({ token: t, channel: 'onchain', artefact: 'r' });
   assert.equal((await mk(raw2)).status, 401);
 });
-test('legacy unsigned header binding: allowed and marked, or refused when disabled', async () => {
-  const a = await proofEnv(); const t = a.set.results[0].harvest_token;
+test('legacy unsigned header binding: refused by default, allowed+marked only when enabled', async () => {
+  const a = await proofEnv({ allowUnsignedBotRequests: true }); const t = a.set.results[0].harvest_token;
   const r = await postProof(a.h, { token: t, channel: 'web', artefact: 'u' }, { sign: false });
   assert.equal(r.status, 201); assert.equal((await r.json()).binding, 'header');
-  const b = await proofEnv({ allowUnsignedBotRequests: false });
+  const b = await proofEnv();   // default: unsigned refused
   const r2 = await postProof(b.h, { token: b.set.results[0].harvest_token, channel: 'web', artefact: 'u' }, { sign: false });
   assert.equal(r2.status, 401); assert.equal((await r2.json()).error, 'signature_required');
   assert.equal((await postProof(b.h, { token: b.set.results[0].harvest_token, channel: 'web', artefact: 'u' }, { wallet: 'bob', sign: false })).status, 401);

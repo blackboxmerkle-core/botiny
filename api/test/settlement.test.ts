@@ -165,9 +165,9 @@ test("proofs: EIP-191 signed by the paying wallet (real secp256k1), legacy heade
   // forged: claims bot wallet but signed by other
   const forged = { ...(await sign("POST", "/v1/proofs", b3, other)), "x-bot-wallet": bot.address };
   assert.equal((await fetch(base + "/v1/proofs", { method: "POST", headers: { "content-type": "application/json", ...forged }, body: b3 })).status, 401);
-  // legacy (unsigned) still accepted but marked as weak header binding
+  // legacy (unsigned) refused by default (CS_CFG_allowUnsignedBotRequests=1 re-enables, marked binding='header')
   const leg = await fetch(base + "/v1/proofs", { method: "POST", headers: { "content-type": "application/json", "x-bot-wallet": bot.address }, body: JSON.stringify({ token: t, channel: "onchain", artefact: "0xabc" }) });
-  assert.equal(leg.status, 201); assert.equal((await leg.json()).binding, "header");
+  assert.equal(leg.status, 401); assert.equal((await leg.json()).error, "signature_required");
 });
 
 test("earnings require a signed request from the wallet", async () => {

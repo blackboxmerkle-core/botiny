@@ -36,7 +36,8 @@ export async function revokeBan(id: number, actor: string) {
 }
 export const activeBans = () => q("SELECT * FROM bans WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())");
 export function clientIp(req: express.Request) {
-  const xf = String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim();
+  // LAST X-Forwarded-For entry = the hop appended by our proxy (ngrok); earlier entries are client-controlled.
+  const xf = String(req.headers["x-forwarded-for"] ?? "").split(",").map(x => x.trim()).filter(Boolean).pop() ?? "";
   const ip = (xf || req.socket.remoteAddress || "").replace(/^::ffff:/, "");
   return ip;
 }
