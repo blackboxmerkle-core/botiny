@@ -97,52 +97,69 @@ test("redirect + PG scoring: paid click accrues held click + chat show lines", a
   assert.equal(self.status, 302);
 });
 
-test("settlement: unclaimed lines refunded after expiry, held lines vest after holdback; idempotent; conserves escrow; replay intact", async () => {
+const poolOf = async (kind?: string) => Number((await pool.query(
+  kind ? "SELECT COALESCE(SUM(amount_atomic),0)::text s FROM incentive_pool_ledger WHERE kind=$1"
+       : "SELECT (COALESCE(SUM(amount_atomic) FILTER (WHERE kind LIKE 'returned%'),0) - COALESCE(SUM(amount_atomic) FILTER (WHERE kind IN ('pool_draw','expired_revenue')),0))::text s FROM incentive_pool_ledger",
+  kind ? [kind] : [])).rows[0].s);
+const reversals = async () => Number((await pool.query("SELECT count(*)::int n FROM balance_ledger WHERE kind='incentive_escrow_reversal'")).rows[0].n);
+
+test("settlement: NO refund on expiry — unearned lines return to the pool; held lines vest; idempotent; conserves escrow; replay intact", async () => {
   const before = await balance(ADV);
   const escrow = -Number((await pool.query("SELECT COALESCE(SUM(delta_atomic),0)::text s FROM balance_ledger WHERE kind='incentive_escrow' AND advertiser_id=$1", [ADV])).rows[0].s);
-  // nothing due yet
   const s0 = await settleIncentives(Date.now());
-  assert.equal(s0.refunded, 0);
-  // after token expiry (+grace): every unaccrued line returns; accrued (held) lines don't
+  assert.equal(s0.returned, 0);
   const s1 = await settleIncentives(Date.now() + 8 * DAY);
-  assert.ok(s1.refunded > 0);
+  assert.ok(s1.returned > 0);
+  assert.equal(s1.refunded, 0); assert.equal(await reversals(), 0, "no incentive_escrow_reversal rows");
+  assert.equal(await balance(ADV), before, "advertiser balance unchanged: nothing credited back");
   const accrued = Number((await pool.query("SELECT COALESCE(SUM(delta_atomic),0)::text s FROM incentive_ledger WHERE kind IN ('accrue_held','review_hold')")).rows[0].s);
-  assert.equal(escrow, s1.refunded_atomic + accrued, "escrow = refunded + accrued");
-  assert.equal(await balance(ADV), before + s1.refunded_atomic);
-  // idempotent
-  assert.deepEqual(await settleIncentives(Date.now() + 8 * DAY), { vested: 0, refunded: 0, refunded_atomic: 0 });
-  // vest after 14-day holdback; no balance movement
+  assert.equal(escrow, s1.returned_atomic + accrued, "escrow = returned-to-pool + accrued");
+  assert.equal(await poolOf(), s1.returned_atomic);
+  assert.equal(s1.expired_revenue_atomic, 0, "offer not expired yet");
+  const again = await settleIncentives(Date.now() + 8 * DAY);
+  assert.equal(again.returned, 0); assert.equal(again.vested, 0);
   const b2 = await balance(ADV);
   const s2 = await settleIncentives(Date.now() + 15 * DAY);
-  assert.ok(s2.vested > 0); assert.equal(s2.refunded, 0); assert.equal(await balance(ADV), b2);
-  assert.equal((await settleIncentives(Date.now() + 15 * DAY)).vested, 0);
+  assert.ok(s2.vested > 0); assert.equal(s2.returned, 0); assert.equal(await balance(ADV), b2);
   await noNegative();
   const rp = await (await fetch(`${base}/v1/requests/${R.request_id}/replay`)).json();
   assert.equal(rp.match, true);
-  // the reversal rows are idempotency-keyed
-  await assert.rejects(pool.query("INSERT INTO balance_ledger(advertiser_id,delta_atomic,kind,escrow_ref) SELECT advertiser_id, 1, 'incentive_escrow_reversal', escrow_ref FROM balance_ledger WHERE escrow_ref IS NOT NULL LIMIT 1"));
-  await assert.rejects(pool.query("INSERT INTO balance_ledger(advertiser_id,delta_atomic,kind,escrow_ref) VALUES ($1,-5,'incentive_escrow_reversal','x:click')", [ADV]));
-  // vested lines can't be clawed back
   const vestedClick = (await pool.query("SELECT click_id FROM incentive_ledger WHERE entry_id=$1 LIMIT 1", [clickedEntry])).rows[0].click_id;
   assert.equal((await fetch(`${base}/v1/admin/clicks/${vestedClick}/clawback`, { method: "POST", headers: H, body: "{}" })).status, 500);
 });
 
-test("clawback during holdback returns escrow to the provider (and gated chat shows)", async () => {
+test("pool is re-distributed before new advertiser money is escrowed", async () => {
+  const pool0 = await poolOf(), b0 = await balance(ADV);
+  assert.ok(pool0 > 0);
+  const r = await rec();
+  const issued = r.click_links.reduce((s: number, c: any) => s + c.show_incentive_atomic + c.click_incentive_atomic, 0);
+  assert.ok(issued > 0);
+  const draws = Number((await pool.query("SELECT COALESCE(SUM(amount_atomic),0)::text s FROM incentive_pool_ledger WHERE kind='pool_draw' AND request_id=$1", [r.request_id])).rows[0].s);
+  const funded = Number((await pool.query("SELECT COALESCE(SUM(amount_atomic),0)::text s FROM incentive_pool_ledger WHERE kind='funded' AND request_id=$1", [r.request_id])).rows[0].s);
+  assert.equal(draws + funded, issued); assert.equal(draws, Math.min(pool0, issued));
+  assert.ok(b0 - (await balance(ADV)) >= funded);
+});
+
+test("clawback returns the line to the pool (not the advertiser); expired pool becomes platform revenue", async () => {
   const r = await rec();
   const mine = r.click_links.filter((c: any) => c.show_incentive_atomic + c.click_incentive_atomic > 0);
   const c = await clickLink(mine[0].short_url);
   assert.equal(c.paid, true);
-  const b = await balance(ADV);
+  const b = await balance(ADV), p0 = await poolOf();
   const res = await (await fetch(`${base}/v1/admin/clicks/${c.click_id}/clawback`, { method: "POST", headers: H, body: JSON.stringify({ reason: "provider_report" }) })).json();
   assert.ok(res.clawed_back >= 2);
-  const refundedNow = Number((await pool.query("SELECT COALESCE(SUM(amount_atomic),0)::text s FROM escrow_refunds WHERE reason='clawback' AND token = ANY($1)", [r.click_links.map((x: any) => x.harvest_token)])).rows[0].s);
-  assert.equal(await balance(ADV), b + refundedNow);
-  assert.ok(refundedNow > 0);
-  // a late accrual for a refunded line is refused
-  const again = await settleIncentives(Date.now() + 30 * DAY);
-  const tot = Number((await pool.query("SELECT COALESCE(SUM(delta_atomic),0)::text s FROM balance_ledger WHERE request_id=$1 AND kind IN ('incentive_escrow','incentive_escrow_reversal')", [r.request_id])).rows[0].s);
-  assert.equal(tot, 0, "everything escrowed for this set came back (clawed + unclaimed)");
-  assert.ok(again.refunded >= 0);
+  const back = Number((await pool.query("SELECT COALESCE(SUM(amount_atomic),0)::text s FROM incentive_pool_ledger WHERE kind='returned_clawback' AND request_id=$1", [r.request_id])).rows[0].s);
+  assert.ok(back > 0);
+  assert.equal(await balance(ADV), b, "clawback does not credit the advertiser");
+  assert.equal(await poolOf(), p0 + back);
+  // past the offer expiry (default first offer + 30d): everything left over is platform revenue, never refunded
+  const late = await settleIncentives(Date.now() + 31 * DAY);
+  const left = await poolOf();
+  assert.equal(left, 0, "pool swept at expiry");
+  assert.ok(late.expired_revenue_atomic > 0);
+  assert.equal(await poolOf("expired_revenue"), late.expired_revenue_atomic);
+  assert.equal(await balance(ADV), b); assert.equal(await reversals(), 0);
+  assert.equal((await settleIncentives(Date.now() + 31 * DAY)).expired_revenue_atomic, 0, "idempotent");
   await noNegative();
 });
 

@@ -20,3 +20,12 @@ Integration with `api/` (not done here): `/v1/recommend` calls `engine.issueSet`
 - `src/pg-store.js` – Postgres store (same async interface as MemoryStore; injected `query`, no deps). The API scores clicks with it under `CLICK_LEDGER_LOCK`.
 - Escrow lifecycle (API `src/clicks.ts`): issue → `incentive_escrow` (−) per provider; click/show accrue → held → vest after holdback (stays spent); unclaimed after deadline+grace, or clawed back → `incentive_escrow_reversal` (+) per line, `escrow_ref` UNIQUE (idempotent), recorded in `escrow_refunds`. Settlement holds MARKET_LOCK + CLICK_LEDGER_LOCK.
 - `src/binding.js` – EIP-191 signed bot requests (`X-Bot-Wallet`, `X-Bot-Timestamp`, `X-Bot-Signature` over method/path/wallet/timestamp/body-sha256), ±5 min skew, single-use signatures. Legacy unsigned proofs are accepted only while `allowUnsignedBotRequests` is on and are stored `binding='header'`.
+
+## Policy: no refunds of escrowed incentives (2026-10-12)
+Escrowed incentives are never credited back to the advertiser. Lines that can no longer be earned, and lines whose
+click is clawed back as fraudulent, return to the listing's incentive pool (`incentive_pool_ledger`) and are
+re-distributed (drawn before new advertiser money) until the offer expires; whatever is left at expiry is platform
+revenue (`expired_revenue`). Offers carry `budget_atomic` + `expires_at`; ranker `promo-v3` gives offers behind their
+linear budget schedule a bounded pacing boost inside the promoted slots (only above the relevance threshold), with
+`pacing_at_ms` pinned in the request so replay matches. Reports: `GET /v1/advertisers/me/incentives/report[?format=csv]`,
+Admin → Incentives. Legacy `incentive_escrow_reversal` rows written before this change are kept (append-only).

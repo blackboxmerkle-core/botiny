@@ -68,7 +68,10 @@ export class PgStore {
     if (f.bot_wallet) { p.push(f.bot_wallet); w.push(`bot_wallet=$${p.length}`); }
     return (await this.q(`SELECT * FROM incentive_ledger ${w.length ? 'WHERE ' + w.join(' AND ') : ''} ORDER BY seq`, p)).rows.map(ledgerRow);
   }
-  async isRefunded(entry_id) { return (await this.q('SELECT 1 FROM escrow_refunds WHERE entry_id=$1', [entry_id])).rows.length > 0; }
+  // line's escrow already left it: legacy refund, or returned to the listing pool (no-refund policy) -> no late accrual
+  async isRefunded(entry_id) {
+    return (await this.q(`SELECT 1 FROM escrow_refunds WHERE entry_id=$1 UNION ALL SELECT 1 FROM incentive_pool_ledger WHERE entry_id=$1 AND kind IN ('returned_unearned','returned_clawback')`, [entry_id])).rows.length > 0;
+  }
   async useSignature(hash, expiresAt) {
     await this.q('DELETE FROM used_signatures WHERE expires_at < now()');
     return (await this.q('INSERT INTO used_signatures VALUES ($1,$2) ON CONFLICT DO NOTHING RETURNING 1', [hash, ts(expiresAt)])).rows.length > 0;

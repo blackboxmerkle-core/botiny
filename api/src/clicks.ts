@@ -97,50 +97,74 @@ export async function issueClickLinks(client: PoolClient, a: {
   const cfg = engine.cfg;
   const { buildResultSet } = await load("curation.js");
   const ids = a.results.map(r => r.listing_id);
-  const offers = new Map<string, { s: number; c: number }>((await client.query(
-    `SELECT DISTINCT ON (listing_id) listing_id, show_atomic, click_atomic FROM incentive_offers WHERE seq <= $1 AND listing_id = ANY($2) ORDER BY listing_id, seq DESC`,
-    [a.market_seq, ids])).rows.map(r => [r.listing_id, { s: Number(r.show_atomic), c: Number(r.click_atomic) }]));
+  // offers pinned at market_seq; expired offers carry no incentive (expiry: explicit, else first offer + 30d)
+  const offers = new Map<string, { s: number; c: number; b: number | null }>((await client.query(
+    `SELECT * FROM (SELECT DISTINCT ON (o.listing_id) o.listing_id, o.show_atomic, o.click_atomic, o.budget_atomic,
+            COALESCE(o.expires_at, (SELECT MIN(f.created_at) FROM incentive_offers f WHERE f.listing_id=o.listing_id) + interval '30 days') AS exp
+       FROM incentive_offers o WHERE o.seq <= $1 AND o.listing_id = ANY($2) ORDER BY o.listing_id, o.seq DESC) x WHERE exp > now()`,
+    [a.market_seq, ids])).rows.map(r => [r.listing_id, { s: Number(r.show_atomic), c: Number(r.click_atomic), b: r.budget_atomic == null ? null : Number(r.budget_atomic) }]));
   const advs = new Set((await client.query("SELECT advertiser_id FROM advertisers WHERE advertiser_id = ANY($1)", [[...new Set(a.providers)]])).rows.map(r => r.advertiser_id));
   let ranked = a.results.map((r, i) => {
     const o = offers.get(r.listing_id); const funded = advs.has(a.providers[i]);
     return { listing_id: r.listing_id, response_rank: r.rank, cluster_id: a.providers[i], provider_id: a.providers[i], relevance: r.score_ppm / 1e6, dest_url: r.address,
       show_offer_atomic: funded && o ? o.s : 0, click_offer_atomic: funded && o ? o.c : 0 };
   });
-  const needs = () => {
-    const m = new Map<string, number>();
-    for (const it of buildResultSet(ranked, cfg).items as any[]) if (it.show_atomic + it.click_atomic > 0) m.set(it.cluster_id, (m.get(it.cluster_id) ?? 0) + it.show_atomic + it.click_atomic);
+  const needsL = () => {
+    const m = new Map<string, { p: string; amt: number }>();
+    for (const it of buildResultSet(ranked, cfg).items as any[]) if (it.show_atomic + it.click_atomic > 0) m.set(it.listing_id, { p: it.cluster_id, amt: it.show_atomic + it.click_atomic });
     return m;
   };
   const zero = (bad: Set<string>) => { ranked = ranked.map(r => bad.has(r.cluster_id) ? { ...r, show_offer_atomic: 0, click_offer_atomic: 0 } : r); };
-  // cheap pre-check against the live balance
-  { const pre = needs(); const bad = new Set<string>(); for (const [p, n] of pre) if ((await balanceOf(client, p)) < n) bad.add(p); zero(bad); }
+  const zeroL = (bad: Set<string>) => { ranked = ranked.map(r => bad.has(r.listing_id) ? { ...r, show_offer_atomic: 0, click_offer_atomic: 0 } : r); };
+  const poolSums = async (l: string) => { const r = (await client.query(`SELECT
+      COALESCE(SUM(amount_atomic) FILTER (WHERE kind IN ('returned_unearned','returned_clawback')),0) - COALESCE(SUM(amount_atomic) FILTER (WHERE kind IN ('pool_draw','expired_revenue')),0) AS pool,
+      COALESCE(SUM(amount_atomic) FILTER (WHERE kind='funded'),0) AS funded FROM incentive_pool_ledger WHERE listing_id=$1`, [l])).rows[0];
+    return { pool: Number(r.pool), funded: Number(r.funded) }; };
+  // cheap pre-check against the live balance (pool draws only make it cheaper)
+  { const per = new Map<string, number>(); for (const { p, amt } of needsL().values()) per.set(p, (per.get(p) ?? 0) + amt);
+    const bad = new Set<string>(); for (const [p, n] of per) if ((await balanceOf(client, p)) < n) bad.add(p); zero(bad); }
   if (_clickHooks.afterAffordabilityCheck) await _clickHooks.afterAffordabilityCheck();
-  // escrow with per-provider savepoints; iterate because zeroing a provider can rescale others under the set cap
-  const skipped = new Set<string>(); let escrowed = new Map<string, number>();
-  for (let iter = 0; iter < 5; iter++) {
+  // Per listing: draw from the listing's pool (returned/unearned escrow) first, then escrow new advertiser money
+  // within the offer budget. Per-provider savepoints + live re-check keep balances non-negative under races.
+  const skipped = new Set<string>(), budgetCapped = new Set<string>(); let escrowed = new Map<string, number>(), drawn = new Map<string, number>();
+  for (let iter = 0; iter < 8; iter++) {
     await client.query("SAVEPOINT click_escrow");
-    const need = needs(); const bad = new Set<string>(); escrowed = new Map();
-    for (const [p, amt] of need) {
+    const need = needsL(); const bad = new Set<string>(), overBudget = new Set<string>(); escrowed = new Map(); drawn = new Map();
+    const plan: { l: string; p: string; draw: number; fund: number }[] = []; const byProv = new Map<string, number>();
+    for (const [l, { p, amt }] of need) {
+      const { pool: pl, funded } = await poolSums(l); const draw = Math.min(Math.max(pl, 0), amt), fund = amt - draw; const B = offers.get(l)?.b ?? null;
+      if (B != null && funded + fund > B) { overBudget.add(l); continue; }
+      plan.push({ l, p, draw, fund }); byProv.set(p, (byProv.get(p) ?? 0) + fund); if (draw) drawn.set(p, (drawn.get(p) ?? 0) + draw);
+    }
+    if (overBudget.size) { await client.query("ROLLBACK TO SAVEPOINT click_escrow"); await client.query("RELEASE SAVEPOINT click_escrow"); for (const l of overBudget) budgetCapped.add(l); zeroL(overBudget); continue; }
+    for (const [p, amt] of byProv) {
+      if (amt <= 0) continue;
       await client.query("SAVEPOINT click_escrow_p");
       await client.query(`INSERT INTO balance_ledger(advertiser_id,delta_atomic,kind,request_id,note) VALUES ($1,$2,'incentive_escrow',$3,$4)`,
         [p, -amt, a.request_id, `click-server escrow, channel ${channel}`]);
       if ((await balanceOf(client, p)) < 0) { await client.query("ROLLBACK TO SAVEPOINT click_escrow_p"); bad.add(p); }
       else { await client.query("RELEASE SAVEPOINT click_escrow_p"); escrowed.set(p, amt); }
     }
-    if (!bad.size) { await client.query("RELEASE SAVEPOINT click_escrow"); break; }
+    if (!bad.size) {
+      for (const x of plan) {
+        if (x.fund) await client.query(`INSERT INTO incentive_pool_ledger(listing_id,provider_id,kind,amount_atomic,request_id,note) VALUES ($1,$2,'funded',$3,$4,'escrowed from advertiser balance')`, [x.l, x.p, x.fund, a.request_id]);
+        if (x.draw) await client.query(`INSERT INTO incentive_pool_ledger(listing_id,provider_id,kind,amount_atomic,request_id,note) VALUES ($1,$2,'pool_draw',$3,$4,'re-distributed from pool')`, [x.l, x.p, x.draw, a.request_id]);
+      }
+      await client.query("RELEASE SAVEPOINT click_escrow"); break;
+    }
     for (const p of bad) skipped.add(p);
     await client.query("ROLLBACK TO SAVEPOINT click_escrow"); await client.query("RELEASE SAVEPOINT click_escrow");
     zero(skipped);
-    if (iter === 4) { zero(new Set(ranked.map(r => r.cluster_id))); escrowed = new Map(); }
+    if (iter === 7) { zero(new Set(ranked.map(r => r.cluster_id))); escrowed = new Map(); drawn = new Map(); }
   }
   const set = await engine.issueSet({ set_id: a.request_id, request_id: a.request_id, bot_wallet: wallet, channel, ranked });
-  // the signed amounts must equal what was escrowed, per provider
+  // the signed amounts must equal escrow + pool draws, per provider
   const signed = new Map<string, number>();
   for (const r of set.results) { const p = ranked.find(x => x.listing_id === r.listing_id)!.provider_id; const v = r.show_incentive_atomic + r.click_incentive_atomic; if (v) signed.set(p, (signed.get(p) ?? 0) + v); }
-  for (const p of new Set([...signed.keys(), ...escrowed.keys()])) if ((signed.get(p) ?? 0) !== (escrowed.get(p) ?? 0)) throw new Error(`escrow mismatch for ${p}`);
+  for (const p of new Set([...signed.keys(), ...escrowed.keys(), ...drawn.keys()])) if ((signed.get(p) ?? 0) !== (escrowed.get(p) ?? 0) + (drawn.get(p) ?? 0)) throw new Error(`escrow mismatch for ${p}`);
   if (a.client_req) await engine.noteBotApiCall(wallet, a.client_req);
   const config = { fee_atomic: cfg.feeAtomic, line_item_cap_mult: cfg.lineItemCapMult, cluster_cap_mult: cfg.clusterCapMult, set_cap_mult: cfg.setCapMult,
-    max_slots_per_cluster: cfg.maxSlotsPerCluster, min_relevance: cfg.minRelevance, min_distinct_clusters: cfg.minDistinctClusters, channel, skipped: [...skipped] };
+    max_slots_per_cluster: cfg.maxSlotsPerCluster, min_relevance: cfg.minRelevance, min_distinct_clusters: cfg.minDistinctClusters, channel, skipped: [...skipped], budget_capped: [...budgetCapped] };
   const click_links = set.results.map((r: any) => ({ rank: r.rank, listing_id: r.listing_id, short_url: r.short_url, track_url: r.track_url, harvest_token: r.harvest_token,
     show_incentive_atomic: r.show_incentive_atomic, click_incentive_atomic: r.click_incentive_atomic, disclosure: r.disclosure }));
   return { click_links, debited: [...escrowed.keys()], config, kid: keys.kid, skipped: [...skipped] };
@@ -185,22 +209,35 @@ export async function settleIncentives(now = Date.now()) {
       st AS (SELECT DISTINCT ON (entry_id) entry_id, kind FROM incentive_ledger ORDER BY entry_id, seq DESC)
       SELECT l.*, st.kind AS last_kind FROM lines l LEFT JOIN st USING (entry_id)
        WHERE NOT EXISTS (SELECT 1 FROM escrow_refunds r WHERE r.entry_id = l.entry_id)
+         AND NOT EXISTS (SELECT 1 FROM incentive_pool_ledger x WHERE x.entry_id = l.entry_id AND x.kind IN ('returned_unearned','returned_clawback'))
          AND (st.kind = 'clawback'
               OR (st.kind IS NULL AND (CASE WHEN l.line='show' AND l.channel='chat' THEN LEAST(l.issued_at + make_interval(secs => $2::float8/1000), l.expires_at) ELSE l.expires_at END)
                     + make_interval(secs => $3::float8/1000) < to_timestamp($1::float8/1000)))
        ORDER BY l.entry_id`, [now, e.cfg.chatShowClickWindowMs, e.cfg.settleGraceMs])).rows;
-    let refunded = 0, refunded_atomic = 0;
+    // NO refunds (policy): unearned / clawed-back lines go back to the listing's pool for re-distribution.
+    let returned = 0, returned_atomic = 0;
     for (const r of cand) {
-      const reason = r.last_kind === "clawback" ? "clawback" : "unclaimed";
-      const ins = await c.query(`INSERT INTO balance_ledger(advertiser_id,delta_atomic,kind,request_id,listing_id,escrow_ref,note)
-          VALUES ($1,$2,'incentive_escrow_reversal',$3,$4,$5,$6) ON CONFLICT (escrow_ref) DO NOTHING RETURNING seq`,
-        [r.provider_id, Number(r.amount), r.request_id, r.listing_id, r.entry_id, `escrow reversal (${reason})`]);
-      if (!ins.rows.length) continue;
-      await c.query(`INSERT INTO escrow_refunds(entry_id,token,line,provider_id,amount_atomic,reason,balance_ledger_seq) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [r.entry_id, r.token, r.line, r.provider_id, Number(r.amount), reason, ins.rows[0].seq]);
-      refunded++; refunded_atomic += Number(r.amount);
+      const kind = r.last_kind === "clawback" ? "returned_clawback" : "returned_unearned";
+      const ins = await c.query(`INSERT INTO incentive_pool_ledger(listing_id,provider_id,kind,amount_atomic,request_id,entry_id,note) VALUES ($1,$2,$3,$4,$5,$6,$7)
+          ON CONFLICT (entry_id) WHERE kind IN ('returned_unearned','returned_clawback') DO NOTHING RETURNING seq`,
+        [r.listing_id, r.provider_id, kind, Number(r.amount), r.request_id, r.entry_id, kind === "returned_clawback" ? "clawed back: back to pool" : "unearned: back to pool"]);
+      if (ins.rows.length) { returned++; returned_atomic += Number(r.amount); }
     }
-    return { vested, refunded, refunded_atomic };
+    // Offer expired => whatever is left in its pool is platform revenue (never credited back to the advertiser).
+    const exp = (await c.query(`
+      WITH cur AS (SELECT DISTINCT ON (o.listing_id) o.listing_id, COALESCE(o.expires_at, (SELECT MIN(f.created_at) FROM incentive_offers f WHERE f.listing_id=o.listing_id) + interval '30 days') exp
+                     FROM incentive_offers o ORDER BY o.listing_id, o.seq DESC),
+           pl AS (SELECT listing_id, MIN(provider_id) provider_id,
+                    COALESCE(SUM(amount_atomic) FILTER (WHERE kind IN ('returned_unearned','returned_clawback')),0) - COALESCE(SUM(amount_atomic) FILTER (WHERE kind IN ('pool_draw','expired_revenue')),0) AS bal
+                    FROM incentive_pool_ledger GROUP BY 1)
+      SELECT pl.* FROM pl JOIN cur USING (listing_id) WHERE pl.bal > 0 AND cur.exp <= to_timestamp($1::float8/1000) ORDER BY 1`, [now])).rows;
+    let expired_revenue_atomic = 0;
+    for (const r of exp) {
+      await c.query(`INSERT INTO incentive_pool_ledger(listing_id,provider_id,kind,amount_atomic,note) VALUES ($1,$2,'expired_revenue',$3,'offer expired: unconsumed pool recognised as platform revenue')`,
+        [r.listing_id, r.provider_id, Number(r.bal)]);
+      expired_revenue_atomic += Number(r.bal);
+    }
+    return { vested, returned, returned_atomic, expired_revenue_atomic, refunded: 0 };
   });
 }
 

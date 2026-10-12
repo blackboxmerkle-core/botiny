@@ -97,6 +97,23 @@ export function adminRouter() {
   r.post("/api/admin/relayer/rotate", async (req, res) => {
     try { res.json(await rotateRelayer({ generate: !!req.body?.generate, private_key: req.body?.private_key, confirm: req.body?.confirm }, actorOf(req.headers.authorization))); } catch (e) { fail(res, e); }
   });
+  // ---------- Incentives: pacing + advertiser reports (no refunds; unconsumed at expiry = platform revenue) ----------
+  r.get("/api/admin/incentives/report", async (req, res) => {
+    const { incentiveReport, reportCsv } = await import("./pacing");
+    const adv = typeof req.query.advertiser === "string" && req.query.advertiser ? req.query.advertiser : null;
+    const rep = await incentiveReport(pool, adv);
+    if (req.query.format === "csv") return res.type("text/csv").set("Content-Disposition", `attachment; filename="incentives-${(adv ?? "all").replace(/\W/g, "_")}.csv"`).send(reportCsv(rep));
+    res.json(rep);
+  });
+  r.get("/api/admin/incentives/pacing", async (_q2, res) => {
+    const { incentiveReport } = await import("./pacing");
+    const rep = await incentiveReport(pool, null);
+    const alerts = rep.offers.filter((o: any) => o.pacing.status === "at_risk" || o.pacing.status === "behind")
+      .sort((a: any, b: any) => (a.pacing.status === "at_risk" ? 0 : 1) - (b.pacing.status === "at_risk" ? 0 : 1) || b.pacing.lag_ppm - a.pacing.lag_ppm);
+    const counts: Record<string, number> = {}; for (const o of rep.offers) counts[o.pacing.status] = (counts[o.pacing.status] ?? 0) + 1;
+    const rev = (await q("SELECT COALESCE(SUM(amount_atomic),0)::text s FROM incentive_pool_ledger WHERE kind='expired_revenue'"))[0].s;
+    res.json({ counts, alerts, platform_expired_revenue_atomic: Number(rev), policy: rep.policy });
+  });
   // ---------- Bans ----------
   r.get("/api/admin/bans", async (_q2, res) => res.json({
     bans: await q(`SELECT *, (revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())) AS active FROM bans ORDER BY active DESC, ban_id DESC LIMIT 200`),

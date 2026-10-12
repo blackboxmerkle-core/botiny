@@ -53,7 +53,7 @@ button.sm{background:#21262d;color:var(--fg);border:1px solid var(--line);paddin
 <section id="t-admin" class="hide">
  <div class="card testnet">Admin · TESTNET. Every change is append-only/versioned and recorded in the audit log. Keys are never displayed — public addresses only.</div>
  <div class="adm">
- <div class="vnav" id="adm-nav"><button data-a="settings" class="on">Settings</button><button data-a="wallets">Wallets</button><button data-a="terms">Terms</button><button data-a="advertisers">Advertisers</button><button data-a="bans">Bots &amp; bans</button><button data-a="audit">Audit log</button></div>
+ <div class="vnav" id="adm-nav"><button data-a="settings" class="on">Settings</button><button data-a="wallets">Wallets</button><button data-a="terms">Terms</button><button data-a="advertisers">Advertisers</button><button data-a="incentives">Incentives</button><button data-a="bans">Bots &amp; bans</button><button data-a="audit">Audit log</button></div>
  <div class="apanes">
  <div id="a-settings"><div class="two" >
   <div class="card"><h2>Pricing &amp; ranking settings <span id="ad-ver" class="pill"></span></h2><table id="ad-set"></table>
@@ -79,6 +79,14 @@ button.sm{background:#21262d;color:var(--fg);border:1px solid var(--line);paddin
   <div class="filters" style="margin-top:8px">New advertiser <input id="na-id" placeholder="adv:acme" style="width:160px"><input id="na-name" placeholder="name" style="width:160px"><button class="act" id="na-go">Create</button> <span id="na-msg" class="mono"></span></div></div>
  <div class="card" style="margin-top:16px"><h2>Listings — bids &amp; pause</h2><table id="ad-lst"></table></div>
  <div class="card" style="margin-top:16px"><h2>Recent bid / pause events</h2><table id="ad-ev"></table></div></div>
+ <div id="a-incentives" class="hide">
+  <div class="card"><h2>Click incentives — pacing &amp; advertiser report</h2><p class="mut" id="inc-policy"></p>
+   <div class="filters">Advertiser <input id="inc-adv" placeholder="all (or adv:id)" style="width:180px"><button class="act" id="inc-go">Load</button> <a id="inc-csv" class="mono" href="#">CSV export</a></div></div>
+  <div class="grid" id="inc-kpi" style="margin-top:16px"></div>
+  <div class="card" style="margin-top:16px"><h2>Pacing alerts (behind / at risk)</h2><table id="inc-alerts"></table></div>
+  <div class="card" style="margin-top:16px"><h2>Offers</h2><div style="overflow:auto"><table id="inc-offers"></table></div></div>
+  <div class="card" style="margin-top:16px"><h2>Daily timeline (atomic USDC)</h2><table id="inc-tl"></table></div>
+ </div>
  <div id="a-bans" class="hide">
   <div class="card"><h2>Ban a bot</h2><p class="mut">Banned callers get <b>403 with the reason before any 402 or payment</b>, so a banned payer is never charged. <b>X-Bot-Id is self-declared (weak)</b> — wallet and IP/CIDR bans are the strong ones.</p>
    <div class="filters"><select id="b-kind"><option value="wallet">payer wallet</option><option value="ip">IP / CIDR</option><option value="bot">bot id (X-Bot-Id)</option></select><input id="b-value" placeholder="0x… / 203.0.113.0/24 / bot-id" style="width:300px"><input id="b-reason" placeholder="reason" style="width:240px"><label class="mut">expires <input id="b-exp" type="datetime-local" style="width:auto"></label><button class="act" id="b-go">Ban</button><span id="b-msg"></span></div></div>
@@ -265,7 +273,19 @@ async function bansLoad(){const b=await j("api/admin/bans");const act=b.bans.fil
 $("#b-go").onclick=async()=>{const e=$("#b-exp").value;const r=await post("api/admin/bans",{kind:$("#b-kind").value,value:$("#b-value").value.trim(),reason:$("#b-reason").value,expires_at:e?new Date(e).toISOString():null});$("#b-msg").innerHTML=r.error?`<span class="s5">${esc(r.error)}</span>`:`<span class="s2">ban #${r.ban_id} created</span>`;bansLoad();};
 async function unban(id){const r=await post(`api/admin/bans/${id}/revoke`,{});if(r.error)alert(r.error);bansLoad();}
 async function auditLoad(){const a=await j("api/admin/audit");$("#au").innerHTML="<tr><th>When</th><th>Actor</th><th>Action</th><th>Details</th></tr>"+a.map(x=>`<tr><td>${d(x.at)}</td><td>${esc(x.actor)}</td><td><b>${esc(x.action)}</b></td><td class="mono" style="font-size:11px">${esc(JSON.stringify(x.details))}</td></tr>`).join("")||'<tr><td class="mut">empty</td></tr>';}
-async function admin(){if(admTab==="wallets")return walletsLoad();if(admTab==="terms")return tosLoad();if(admTab==="bans")return bansLoad();if(admTab==="audit")return auditLoad();const s=await j("api/admin/state"),S=s.settings.settings;
+
+const PST={on_track:'<span class="badge g">on track</span>',behind:'<span class="badge y">behind</span>',at_risk:'<span class="badge r">at risk</span>',expired:'<span class="badge">expired</span>',no_budget:'<span class="badge">no budget</span>',inactive:'<span class="badge">inactive</span>'};
+async function incLoad(){const adv=$("#inc-adv").value.trim();const qs=adv?"?advertiser="+encodeURIComponent(adv):"";
+ $("#inc-csv").href="api/admin/incentives/report"+(qs?qs+"&":"?")+"format=csv";
+ const [r,pa]=await Promise.all([j("api/admin/incentives/report"+qs),j("api/admin/incentives/pacing")]);const T=r.totals;
+ $("#inc-policy").textContent=r.policy+" Pacing boost (≤0.2 score, inside promoted slots, only above the relevance threshold) goes to offers behind their linear budget schedule; inputs are pinned per request for replay.";
+ $("#inc-kpi").innerHTML=[["Budget",T.budget_atomic],["Funded (escrowed)",T.funded_atomic],["Issued",T.issued_atomic],["Earned by bots",T.earned_atomic],["Vested",T.vested_atomic],["Clawed back",T.clawed_back_atomic],["In pool (re-distributable)",T.pool_atomic],["Expired → platform revenue",pa.platform_expired_revenue_atomic],["At risk / behind",(pa.counts.at_risk||0)+" / "+(pa.counts.behind||0)]].map(([k,v])=>`<div class="card kpi">${v}<small>${k}</small></div>`).join("");
+ $("#inc-alerts").innerHTML="<tr><th>Status</th><th>Listing</th><th>Advertiser</th><th>Consumed</th><th>Remaining</th><th>Lag</th><th>Boost</th><th>Expires</th></tr>"+(pa.alerts.map(o=>`<tr><td>${PST[o.pacing.status]}</td><td>${esc(o.name||o.listing_id)}</td><td>${esc(o.advertiser_id)}</td><td>${o.consumed_pct??"–"}%</td><td>${o.remaining_atomic??"–"}</td><td>${(o.pacing.lag_ppm/1e4).toFixed(1)}%</td><td>${o.pacing.boost_ppm}</td><td>${d(o.expires_at)}</td></tr>`).join("")||'<tr><td colspan=8 class="mut">no alerts</td></tr>');
+ $("#inc-offers").innerHTML="<tr><th>Listing</th><th>Adv</th><th>Show/Click</th><th>Budget</th><th>Funded</th><th>Issued</th><th>Clicks (paid)</th><th>Earned</th><th>Vested</th><th>Clawed</th><th>Pool</th><th>→Platform</th><th>Consumed</th><th>Remaining</th><th>Expiry</th><th>Pacing</th></tr>"+(r.offers.map(o=>`<tr><td>${esc(o.name||o.listing_id)}<br><span class="mut mono">${esc(o.listing_id)}</span></td><td>${esc(o.advertiser_id)}</td><td>${o.show_atomic}/${o.click_atomic}</td><td>${o.budget_atomic??"–"}</td><td>${o.funded_atomic}</td><td>${o.issued_atomic}</td><td>${o.clicks} (${o.paid_clicks})</td><td>${o.earned_atomic}</td><td>${o.vested_atomic}</td><td>${o.clawed_back_atomic}</td><td>${o.pool_atomic}</td><td>${o.expired_to_platform_atomic}</td><td>${o.consumed_pct??"–"}%</td><td>${o.remaining_atomic??"–"}</td><td>${d(o.expires_at)}</td><td>${PST[o.pacing.status]}</td></tr>`).join("")||'<tr><td colspan=16 class="mut">no incentive offers</td></tr>');
+ const K=["issued","funded","pool_draw","earned","vested","clawed_back","returned_unearned","returned_clawback","expired_revenue"];
+ $("#inc-tl").innerHTML="<tr><th>Day</th>"+K.map(k=>`<th>${k.replace(/_/g," ")}</th>`).join("")+"</tr>"+(r.timeline.map(t=>`<tr><td>${t.day}</td>${K.map(k=>`<td>${t[k]??""}</td>`).join("")}</tr>`).join("")||'<tr><td class="mut">no activity</td></tr>');}
+$("#inc-go").onclick=incLoad;
+async function admin(){if(admTab==="incentives")return incLoad();if(admTab==="wallets")return walletsLoad();if(admTab==="terms")return tosLoad();if(admTab==="bans")return bansLoad();if(admTab==="audit")return auditLoad();const s=await j("api/admin/state"),S=s.settings.settings;
  $("#ad-ver").textContent="v"+s.settings.version;
  $("#ad-set").innerHTML=SETK.map(([k,l,u])=>`<tr><td>${l}<br><span class="mut">${u}</span></td><td><input id="set-${k}" type="number" value="${S[k]}" style="width:140px"></td><td class="mut">${k.endsWith("atomic")?U6(S[k])+" USDC":""}</td></tr>`).join("");
  $("#ad-formula").innerHTML=`Qualify: score ≥ ${S.relevance_threshold_ppm/1e6}. Promo score = relevance_ppm + ${S.bid_weight_ppm_per_atomic} × bid_atomic. Top ${S.promoted_slots} funded bidders (balance ≥ fixed ${U6(S.fixed_cpi_atomic)} + bid) take the first slots, labelled Sponsored and debited; everything else is organic by relevance and free.`;

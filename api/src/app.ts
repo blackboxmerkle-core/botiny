@@ -69,8 +69,9 @@ export function createApp() {
       await client.query("SELECT pg_advisory_xact_lock($1)", [MARKET_LOCK]);
       const seq = Number((await client.query("SELECT COALESCE(MAX(seq),0) AS s FROM listings")).rows[0].s);
       const mseq = await marketSeq(client);
-      const reqCanon = canonicalRequest(inp, seq, { market_seq: mseq, settings_version });
-      out = await rank(client, { ...inp, catalogue_seq: seq, market_seq: mseq, settings_version, embedding_model: EMBEDDING_MODEL, ranker_version: RANKER_VERSION });
+      const pacing_at_ms = Date.now();
+      const reqCanon = canonicalRequest(inp, seq, { market_seq: mseq, settings_version, pacing_at_ms });
+      out = await rank(client, { ...inp, catalogue_seq: seq, market_seq: mseq, settings_version, pacing_at_ms, embedding_model: EMBEDDING_MODEL, ranker_version: RANKER_VERSION });
       await client.query(
         `INSERT INTO requests(request_id,catalogue_seq,embedding_model,ranker_version,request_canonical,request_hash,
            response_canonical,response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_ref,payment_status,bot_id,settings_version,market_seq,
@@ -98,6 +99,7 @@ export function createApp() {
       click_links = cl.click_links;
       debited.push(...cl.debited);
       if (cl.kid) await client.query("UPDATE requests SET click_kid=$2, click_config=$3 WHERE request_id=$1", [request_id, cl.kid, cl.config]);
+      if ((out as any).pacing && Object.keys((out as any).pacing).length) await client.query("UPDATE requests SET pacing=$2 WHERE request_id=$1", [request_id, (out as any).pacing]);
       await assertNonNegative(client, debited);
       if (process.env.FAIL_AFTER_IMPRESSIONS === "1") throw new Error("injected failure");
       await client.query("COMMIT");
@@ -123,7 +125,7 @@ export function createApp() {
     const p = JSON.parse(r.request_canonical);
     try {
       const out = await rank(pool, { query: p.query, k: p.k, catalogue_seq: Number(r.catalogue_seq), embedding_model: r.embedding_model, ranker_version: r.ranker_version,
-        market_seq: r.market_seq == null ? undefined : Number(r.market_seq), settings_version: r.settings_version ?? undefined });
+        market_seq: r.market_seq == null ? undefined : Number(r.market_seq), settings_version: r.settings_version ?? undefined, pacing_at_ms: p.pacing_at_ms });
       res.json({ request_id: r.request_id, logged_hash: r.response_hash, replayed_hash: out.hash, match: out.hash === r.response_hash,
         request_hash_ok: sha256(r.request_canonical) === r.request_hash, catalogue_seq: Number(r.catalogue_seq),
         market_seq: r.market_seq == null ? null : Number(r.market_seq), settings_version: r.settings_version, ranker_version: r.ranker_version,
@@ -155,8 +157,13 @@ export function createApp() {
   app.put("/v1/advertisers/me/listings/:lid/bid", advAuth, async (req, res) => {
     try { res.json(await setBid(String(req.params.lid), { bid_atomic: req.body?.bid_atomic }, "advertiser:" + res.locals.adv, res.locals.adv)); } catch (e) { fail(res, e); }
   });
+  app.get("/v1/advertisers/me/incentives/report", advAuth, async (req, res) => {
+    try { const { incentiveReport, reportCsv } = await import("./pacing"); const r = await incentiveReport(pool, res.locals.adv);
+      if (req.query.format === "csv") { res.type("text/csv").set("Content-Disposition", `attachment; filename="incentives-${res.locals.adv.replace(/\W/g, "_")}.csv"`).send(reportCsv(r)); } else res.json(r);
+    } catch (e) { fail(res, e); }
+  });
   app.put("/v1/advertisers/me/listings/:lid/incentive", advAuth, async (req, res) => {
-    try { res.json(await setIncentive(String(req.params.lid), { show_atomic: req.body?.show_atomic, click_atomic: req.body?.click_atomic }, "advertiser:" + res.locals.adv, res.locals.adv)); } catch (e) { fail(res, e); }
+    try { res.json(await setIncentive(String(req.params.lid), { show_atomic: req.body?.show_atomic, click_atomic: req.body?.click_atomic, budget_atomic: req.body?.budget_atomic, expires_at: req.body?.expires_at }, "advertiser:" + res.locals.adv, res.locals.adv)); } catch (e) { fail(res, e); }
   });
   // ---------- Click server (redirect, proofs, earnings, settlement) ----------
   const clickHandler = async (req: express.Request, res: express.Response, path: string) => {

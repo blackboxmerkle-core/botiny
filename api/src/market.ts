@@ -17,7 +17,7 @@ export async function withMarketLock<T>(fn: (c: PoolClient) => Promise<T>): Prom
   } catch (e) { await c.query("ROLLBACK").catch(() => {}); throw e; } finally { c.release(); }
 }
 export async function marketSeq(c: { query: PoolClient["query"] }) {
-  return Number((await c.query(`SELECT GREATEST((SELECT COALESCE(MAX(seq),0) FROM balance_ledger),(SELECT COALESCE(MAX(seq),0) FROM listing_bid_events),(SELECT COALESCE(MAX(seq),0) FROM incentive_offers)) AS m`)).rows[0].m);
+  return Number((await c.query(`SELECT GREATEST((SELECT COALESCE(MAX(seq),0) FROM balance_ledger),(SELECT COALESCE(MAX(seq),0) FROM listing_bid_events),(SELECT COALESCE(MAX(seq),0) FROM incentive_offers),(SELECT COALESCE(MAX(seq),0) FROM incentive_pool_ledger)) AS m`)).rows[0].m);
 }
 export async function balanceOf(c: { query: PoolClient["query"] }, adv: string) {
   return Number((await c.query("SELECT COALESCE(SUM(delta_atomic),0)::text b FROM balance_ledger WHERE advertiser_id=$1", [adv])).rows[0].b);
@@ -83,18 +83,27 @@ export async function advertiserSummary(adv: string) {
 
 export const MAX_INCENTIVE_ATOMIC = 1_000_000;
 /** Advertiser sets per-listing show/click incentive offers (append-only, market_seq-sequenced). Caps apply at issue time. */
-export async function setIncentive(listing: string, patch: { show_atomic?: number; click_atomic?: number }, by: string, ownerCheck?: string) {
+export async function setIncentive(listing: string, patch: { show_atomic?: number; click_atomic?: number; budget_atomic?: number | null; expires_at?: string | null }, by: string, ownerCheck?: string) {
   for (const k of ["show_atomic", "click_atomic"] as const) {
     const v = patch[k];
     if (v !== undefined && (!Number.isSafeInteger(v) || v < 0 || v > MAX_INCENTIVE_ATOMIC)) throw Object.assign(new Error(`${k} must be integer 0..${MAX_INCENTIVE_ATOMIC}`), { status: 400 });
   }
+  if (patch.budget_atomic != null && (!Number.isSafeInteger(patch.budget_atomic) || patch.budget_atomic <= 0 || patch.budget_atomic > 1_000_000_000_000)) throw Object.assign(new Error("budget_atomic must be integer 1..1e12"), { status: 400 });
+  let exp: Date | null = null;
+  if (patch.expires_at != null) { exp = new Date(patch.expires_at); if (isNaN(+exp) || exp <= new Date() || +exp - Date.now() > 366 * 86_400_000) throw Object.assign(new Error("expires_at must be a future time within 366 days"), { status: 400 }); }
   return withMarketLock(async c => {
     const l = (await c.query("SELECT provider_id FROM listings WHERE listing_id=$1", [listing])).rows[0];
     if (!l) throw Object.assign(new Error("listing not found"), { status: 404 });
     if (ownerCheck && l.provider_id !== ownerCheck) throw Object.assign(new Error("not your listing"), { status: 403 });
-    const cur = (await c.query("SELECT show_atomic, click_atomic FROM incentive_offers WHERE listing_id=$1 ORDER BY seq DESC LIMIT 1", [listing])).rows[0];
-    const next = { show_atomic: patch.show_atomic ?? Number(cur?.show_atomic ?? 0), click_atomic: patch.click_atomic ?? Number(cur?.click_atomic ?? 0) };
-    const r = await c.query("INSERT INTO incentive_offers(listing_id,show_atomic,click_atomic,set_by) VALUES ($1,$2,$3,$4) RETURNING seq", [listing, next.show_atomic, next.click_atomic, by]);
-    return { listing_id: listing, ...next, seq: Number(r.rows[0].seq) };
+    const cur = (await c.query("SELECT show_atomic, click_atomic, budget_atomic, expires_at, created_at FROM incentive_offers WHERE listing_id=$1 ORDER BY seq DESC LIMIT 1", [listing])).rows[0];
+    const { DEFAULT_OFFER_DAYS } = await import("./pacing");
+    // expiry: explicit, else carried over, else first offer + 30d (offers are never open-ended)
+    const first = (await c.query("SELECT MIN(created_at) f FROM incentive_offers WHERE listing_id=$1", [listing])).rows[0].f;
+    const expires_at = exp ?? cur?.expires_at ?? new Date((first ? +new Date(first) : Date.now()) + DEFAULT_OFFER_DAYS * 86_400_000);
+    const next = { show_atomic: patch.show_atomic ?? Number(cur?.show_atomic ?? 0), click_atomic: patch.click_atomic ?? Number(cur?.click_atomic ?? 0),
+      budget_atomic: patch.budget_atomic !== undefined ? patch.budget_atomic : (cur?.budget_atomic == null ? null : Number(cur.budget_atomic)) };
+    const r = await c.query("INSERT INTO incentive_offers(listing_id,show_atomic,click_atomic,budget_atomic,expires_at,set_by) VALUES ($1,$2,$3,$4,$5,$6) RETURNING seq",
+      [listing, next.show_atomic, next.click_atomic, next.budget_atomic, expires_at, by]);
+    return { listing_id: listing, ...next, expires_at: new Date(expires_at).toISOString(), seq: Number(r.rows[0].seq) };
   });
 }
