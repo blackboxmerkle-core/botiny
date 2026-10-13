@@ -42,17 +42,18 @@ test("SIWE: nonce, verify, session, logout; nonce single-use; domain/chain/signa
   const v = await post("/v1/auth/siwe/verify", s);
   assert.equal(v.status, 200); assert.equal(v.address, owner.address.toLowerCase()); assert.deepEqual(v.roles, ["bot_owner"]); assert.match(v.session_token, /^bts_/);
   const ck = v.headers.get("set-cookie")!; assert.match(ck, /botiny_session=bts_/); assert.match(ck, /HttpOnly/); assert.match(ck, /SameSite=Strict/);
-  assert.equal((await post("/v1/auth/siwe/verify", s)).code, "nonce_expired", "nonce replay rejected");
+  assert.equal((await post("/v1/auth/siwe/verify", s)).error, "nonce_expired", "nonce replay rejected");
   const sess = await get("/v1/auth/session", v.session_token); assert.equal(sess.address, owner.address.toLowerCase()); assert.deepEqual(sess.roles, ["bot_owner"]);
   // cookie auth works for GET; cookie writes need X-Botiny-Client
   const cookie = ck.split(";")[0];
   assert.equal((await fetch(base + "/v1/auth/session", { headers: { cookie } }).then(J)).status, 200);
-  assert.equal((await fetch(base + "/v1/auth/logout", { method: "POST", headers: { cookie } }).then(J)).code, "csrf");
-  assert.equal((await post("/v1/auth/siwe/verify", await siwe(owner, { domain: "evil.example.com" }))).code, "domain_mismatch");
-  assert.equal((await post("/v1/auth/siwe/verify", await siwe(owner, { chainId: 8453 }))).code, "chain_not_allowed", "mainnet refused");
-  const bad = await siwe(owner); assert.equal((await post("/v1/auth/siwe/verify", { message: bad.message, signature: await other.signMessage({ message: bad.message }) })).code, "bad_signature");
+  assert.equal((await fetch(base + "/v1/auth/logout", { method: "POST", headers: { cookie } }).then(J)).error, "csrf");
+  assert.equal((await fetch(base + "/v1/suggestions", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ url: "https://csrf.example.com/x", type: "other", name: "csrf" }) }).then(J)).error, "csrf", "optional-session write is CSRF-guarded too");
+  assert.equal((await post("/v1/auth/siwe/verify", await siwe(owner, { domain: "evil.example.com" }))).error, "domain_mismatch");
+  assert.equal((await post("/v1/auth/siwe/verify", await siwe(owner, { chainId: 8453 }))).error, "chain_not_allowed", "mainnet refused");
+  const bad = await siwe(owner); assert.equal((await post("/v1/auth/siwe/verify", { message: bad.message, signature: await other.signMessage({ message: bad.message }) })).error, "bad_signature");
   const expired = await siwe(owner); await pool.query("UPDATE siwe_nonces SET expires_at=now()-interval '1 second' WHERE nonce=$1", [expired.nonce]);
-  assert.equal((await post("/v1/auth/siwe/verify", expired)).code, "nonce_expired");
+  assert.equal((await post("/v1/auth/siwe/verify", expired)).error, "nonce_expired");
   assert.equal((await post("/v1/auth/logout", {}, v.session_token)).ok, true);
   assert.equal((await get("/v1/auth/session", v.session_token)).status, 401, "revoked");
   assert.equal((await get("/v1/auth/session", "bts_" + "x".repeat(40))).status, 401);
@@ -65,12 +66,12 @@ test("advertiser wallet <-> API key link: invalid / linked elsewhere / role gati
   const a = await signIn(owner, ["bot_owner", "advertiser"]);
   assert.deepEqual(a.roles, ["bot_owner"]); assert.equal(a.advertiser.link_required, true);
   assert.equal((await get("/v1/advertisers/me", a.session_token)).status, 401, "no advertiser role yet");
-  assert.equal((await post("/v1/advertisers/me/link-key", { api_key: "adv_nope" }, a.session_token)).code, "api_key_invalid");
+  assert.equal((await post("/v1/advertisers/me/link-key", { api_key: "adv_nope" }, a.session_token)).error, "api_key_invalid");
   const l = await post("/v1/advertisers/me/link-key", { api_key: advKey }, a.session_token);
   assert.equal(l.status, 200); assert.equal(l.advertiser_id, "adv:portal"); assert.ok(l.roles.includes("advertiser"));
   assert.equal((await get("/v1/advertisers/me", a.session_token)).advertiser_id, "adv:portal");
   const b = await signIn(other, ["advertiser"], { api_key: advKey });
-  assert.equal(b.advertiser.code, "api_key_linked_elsewhere"); assert.ok(!b.roles.includes("advertiser"));
+  assert.equal(b.advertiser.error, "api_key_linked_elsewhere"); assert.ok(!b.roles.includes("advertiser"));
   assert.equal((await get("/v1/advertisers/me", b.session_token)).status, 401);
   const a2 = await signIn(owner, ["advertiser"]); assert.deepEqual(a2.roles, ["advertiser"], "linked wallet gets advertiser role on next sign-in");
   assert.equal((await get("/v1/advertisers/me", "bts_bogus_token_value_xxxxxxxxxxxxxxx")).status, 401);
@@ -87,7 +88,7 @@ test("campaigns: list with pacing.ts fields, dry-run draft, insufficient balance
   const body = { listing_id: LID, bid_atomic: 200, incentive: { budget_atomic: 50_000, show_atomic: 10, click_atomic: 100 } };
   const d = await post("/v1/advertisers/me/campaigns", { ...body, dry_run: true }, tok);
   assert.equal(d.state, "draft"); assert.equal(d.summary.impression_cost_atomic, 300); assert.equal(d.summary.max_clicks, 454);
-  assert.equal((await post("/v1/advertisers/me/campaigns", body, tok)).code, "insufficient_balance");
+  assert.equal((await post("/v1/advertisers/me/campaigns", body, tok)).error, "insufficient_balance");
   await admin("/api/admin/advertisers/adv:portal/credit", { amount_atomic: 100_000 });
   assert.equal((await post("/v1/advertisers/me/campaigns", { ...body, listing_id: "lst_nope" }, tok)).status, 404);
   assert.equal((await post("/v1/advertisers/me/campaigns", { ...body, bid_atomic: -1 }, tok)).status, 400);
@@ -128,23 +129,23 @@ test("bot-owner monitoring is scoped to the signed-in wallet (+ linked wallets);
   assert.match(csv.headers.get("content-type")!, /text\/csv/); assert.equal((await csv.text()).trim().split("\n").length, 4);
   for (const r of [...rq.requests, ...rq2.requests]) { const rp = await get(r.replay_url); assert.equal(rp.match, true, "replay MATCH " + r.request_id); assert.equal(rp.logged_hash, r.response_hash); }
   // link a second paying wallet (SIWE signed by that wallet, resource botiny:link:<owner>)
-  const noRes = await siwe(other); assert.equal((await post("/v1/bots/me/wallets", { siwe_message: noRes.message, signature: noRes.signature }, tok)).code, "link_resource_missing");
+  const noRes = await siwe(other); assert.equal((await post("/v1/bots/me/wallets", { siwe_message: noRes.message, signature: noRes.signature }, tok)).error, "link_resource_missing");
   const ln = await siwe(other, { resources: [`botiny:link:${owner.address.toLowerCase()}`] });
   assert.equal((await post("/v1/bots/me/wallets", { siwe_message: ln.message, signature: ln.signature }, tok)).status, 201);
   assert.ok((await get("/v1/bots/me", tok)).bots.some((b: any) => b.bot_id === "other-bot"));
   const s3 = (await signIn(stranger)).session_token;
   const ln2 = await siwe(other, { resources: [`botiny:link:${stranger.address.toLowerCase()}`] });
-  assert.equal((await post("/v1/bots/me/wallets", { siwe_message: ln2.message, signature: ln2.signature }, s3)).code, "wallet_linked_elsewhere");
+  assert.equal((await post("/v1/bots/me/wallets", { siwe_message: ln2.message, signature: ln2.signature }, s3)).error, "wallet_linked_elsewhere");
   assert.deepEqual((await get("/v1/bots/me", s3)).bots, []);
   const e = await get("/v1/bots/me/earnings", tok); assert.equal(e.wallets.length, 2);
   assert.equal((await get("/v1/bots/me/earnings")).status, 401, "unsigned, no session: still 401");
   // appeal
-  assert.equal((await post("/v1/bots/portal-bot/appeal", { message: "please review my bot" }, tok)).code, "not_banned");
+  assert.equal((await post("/v1/bots/portal-bot/appeal", { message: "please review my bot" }, tok)).error, "not_banned");
   assert.equal((await admin("/api/admin/bans", { kind: "bot", value: "portal-bot", reason: "test ban" })).status < 300, true);
   assert.equal((await get("/v1/bots/me", tok)).bots.find((b: any) => b.bot_id === "portal-bot").ban.status, "banned");
   assert.equal((await get("/v1/bots/me/portal-bot/stats", tok)).earnings.frozen, true);
   assert.equal((await post("/v1/bots/portal-bot/appeal", { message: "please review my bot" }, tok)).status, 201);
-  assert.equal((await post("/v1/bots/portal-bot/appeal", { message: "please review my bot" }, tok)).code, "appeal_open");
+  assert.equal((await post("/v1/bots/portal-bot/appeal", { message: "please review my bot" }, tok)).error, "appeal_open");
   assert.equal((await post("/v1/bots/portal-bot/appeal", { message: "please review my bot" }, s3)).status, 404);
 });
 
@@ -157,9 +158,9 @@ test("suggestion URL validation", () => {
 test("suggestions: submit / duplicate / rate limit / mine / admin accept -> crawler queue -> indexed|needs_review; reject; claim", async () => {
   _resetRateLimits();
   const tok = (await signIn(owner)).session_token;
-  assert.equal((await post("/v1/suggestions", { url: "http://10.0.0.1/x", type: "other", name: "n" })).code, "invalid_url");
-  assert.equal((await post("/v1/suggestions", { url: "https://ok.example.com", type: "nope", name: "n" })).code, "invalid_type");
-  assert.equal((await post("/v1/suggestions", { url: "https://ok.example.com", type: "other", name: "x".repeat(81) })).code, "invalid_name");
+  assert.equal((await post("/v1/suggestions", { url: "http://10.0.0.1/x", type: "other", name: "n" })).error, "invalid_url");
+  assert.equal((await post("/v1/suggestions", { url: "https://ok.example.com", type: "nope", name: "n" })).error, "invalid_type");
+  assert.equal((await post("/v1/suggestions", { url: "https://ok.example.com", type: "other", name: "x".repeat(81) })).error, "invalid_name");
   _resetRateLimits();
   const s1 = await post("/v1/suggestions", { url: "https://weather-x402.example.com/api", type: "x402_api", name: "Weather x402", description: "Paid weather forecasts via x402", contact: "@weatherbot" }, tok);
   assert.equal(s1.status, 201); assert.equal(s1.state, "submitted"); assert.equal(s1.claim_wallet, owner.address.toLowerCase()); assert.ok(s1.claim.challenge);
@@ -210,7 +211,7 @@ test("suggestions: submit / duplicate / rate limit / mine / admin accept -> craw
   for (const { request_id } of (await pool.query("SELECT request_id FROM requests")).rows) assert.equal((await get(`/v1/requests/${request_id}/replay`)).match, true);
   // ownership claim: signature over the challenge + a proof method (checker injected; no network in tests)
   const row = (await pool.query("SELECT * FROM listing_suggestions WHERE suggestion_id=$1", [s1.id])).rows[0];
-  assert.equal((await post(`/v1/suggestions/${s1.id}/claim`, { method: "well_known", signature: await other.signMessage({ message: claimChallenge(row) }) }, tok)).code, "bad_signature");
+  assert.equal((await post(`/v1/suggestions/${s1.id}/claim`, { method: "well_known", signature: await other.signMessage({ message: claimChallenge(row) }) }, tok)).error, "bad_signature");
   _setClaimChecker(async (m, s) => ({ ok: m === "well_known" && !!s.claim.token }));
   const cl = await post(`/v1/suggestions/${s1.id}/claim`, { method: "well_known", signature: await owner.signMessage({ message: claimChallenge(row) }) }, tok);
   assert.equal(cl.status, 200); assert.equal(cl.claim.status, "verified");
@@ -218,5 +219,48 @@ test("suggestions: submit / duplicate / rate limit / mine / admin accept -> craw
   assert.equal(cf.status, 422); assert.equal(cf.claim.status, "failed");
   _setClaimChecker(null);
   const s3 = (await signIn(stranger)).session_token;
-  assert.equal((await post(`/v1/suggestions/${s1.id}/claim`, { method: "dns_txt", signature: "0x00" }, s3)).code, "wrong_wallet");
+  assert.equal((await post(`/v1/suggestions/${s1.id}/claim`, { method: "dns_txt", signature: "0x00" }, s3)).error, "wrong_wallet");
+});
+
+test("SIWE nonces are independent 128-bit CSPRNG values (regression: viem generateSiweNonce sliding window)", async () => {
+  const { generateSiweNonce } = await import("viem/siwe");
+  const v1 = generateSiweNonce(), v2 = generateSiweNonce();
+  assert.equal(v1.slice(1), v2.slice(0, -1), "root cause reproduced: viem uid() slides one char per call");
+  const { newNonceValue } = await import("../src/portal");
+  const ns = Array.from({ length: 2000 }, newNonceValue);
+  assert.equal(new Set(ns).size, ns.length);
+  for (const n of ns) assert.match(n, /^[0-9a-f]{32}$/);
+  for (let i = 1; i < ns.length; i++) { assert.notEqual(ns[i].slice(0, -1), ns[i - 1].slice(1)); assert.notEqual(ns[i].slice(0, 16), ns[i - 1].slice(16)); }
+  // via the endpoint too, and check shared-prefix/overlap is no better than chance
+  _resetRateLimits();
+  const api = []; for (let i = 0; i < 20; i++) api.push((await get("/v1/auth/siwe/nonce")).nonce);
+  for (const n of api) assert.match(n, /^[0-9a-f]{32}$/);
+  for (let i = 1; i < api.length; i++) for (let k = 4; k < 32; k++) assert.notEqual(api[i].slice(0, k), api[i - 1].slice(32 - k), `overlap ${k}`);
+  // other tokens: session tokens and claim tokens independent too
+  _resetRateLimits();
+  const toks = [] as string[]; for (let i = 0; i < 5; i++) toks.push((await signIn(stranger)).session_token);
+  for (const t of toks) assert.match(t, /^bts_[A-Za-z0-9_-]{43}$/);
+  for (let i = 1; i < toks.length; i++) assert.notEqual(toks[i].slice(4, 20), toks[i - 1].slice(5, 21));
+  const claims = (await pool.query("SELECT claim->>'token' t FROM listing_suggestions WHERE claim IS NOT NULL")).rows.map(r => r.t);
+  assert.ok(claims.length >= 2); for (const c of claims) assert.match(c, /^[0-9a-f]{32}$/);
+});
+
+test("error shape: {error: code, message} everywhere", async () => {
+  const a = await get("/v1/advertisers/me"); assert.equal(a.status, 401); assert.equal(a.error, "advertiser_auth_required"); assert.match(a.message, /API key.*linked to an advertiser/);
+  const e = await get("/v1/bots/me/earnings"); assert.equal(e.error, "wallet_required"); assert.ok(e.message);
+  const n = await get("/v1/requests/req_nope"); assert.equal(n.status, 404); assert.equal(n.error, "not_found"); assert.ok(n.message);
+  const r = await get("/v1/nope"); assert.equal(r.status, 404); assert.equal(r.error, "not_found");
+  const s = await get("/v1/auth/session"); assert.equal(s.error, "no_session"); assert.ok(s.message);
+  const bj = await fetch(base + "/v1/suggestions", { method: "POST", headers: { "content-type": "application/json" }, body: "{bad" }).then(J); assert.equal(bj.status, 400); assert.equal(bj.error, "invalid_json");
+  const v = await post("/v1/suggestions", { url: "ftp://x.com", type: "other", name: "x" }); assert.equal(v.error, "invalid_url"); assert.match(v.message, /http/);
+});
+
+test("portal front end served same-origin at /portal (static allow-list, no CORS)", async () => {
+  const idx = await fetch(base + "/portal/"); assert.equal(idx.status, 200); assert.match(idx.headers.get("content-type")!, /html/);
+  const si = await fetch(base + "/portal/signin.html"); assert.equal(si.status, 200); assert.equal(si.headers.get("access-control-allow-origin"), null);
+  assert.equal((await fetch(base + "/portal/assets/app.js")).status, 200);
+  assert.match((await fetch(base + "/portal/assets/config.js").then(r => r.text())), /apiBase: ""/);
+  for (const p of ["/portal/serve.py", "/portal/README.md", "/portal/test_fixtures.py", "/portal/..%2f..%2fbot-rec-market%2fapi%2f.env", "/portal/assets/../serve.py"]) assert.equal((await fetch(base + p)).status, 404, p);
+  const pre = await fetch(base + "/v1/auth/session", { method: "OPTIONS", headers: { origin: "https://evil.example.com", "access-control-request-method": "GET" } });
+  assert.equal(pre.headers.get("access-control-allow-origin"), null, "CORS stays off");
 });

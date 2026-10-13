@@ -5,7 +5,7 @@
 import express from "express";
 import { randomBytes, randomUUID, createHash } from "node:crypto";
 import { getAddress, isAddress, verifyMessage } from "viem";
-import { parseSiweMessage, validateSiweMessage, generateSiweNonce } from "viem/siwe";
+import { parseSiweMessage, validateSiweMessage } from "viem/siwe";
 import { pool } from "./db";
 import { sha256 } from "./canonical";
 import { CHAINS } from "./chains";
@@ -40,13 +40,20 @@ const limited = (res: express.Response, e: any) => { if (e?.retryAfter) res.set(
 // ---------- SIWE ----------
 function siweDomains(req: express.Request) {
   const d = new Set<string>();
+  // SIWE_DOMAIN (comma list, e.g. "botiny.si,app.botiny.si") pins the accepted EIP-4361 domain(s); else the PUBLIC_BASE_URL host.
+  const pinned = (process.env.SIWE_DOMAIN ?? "").split(",").map(s => s.trim()).filter(Boolean);
+  if (pinned.length) return new Set(pinned);
   const pub = process.env.PUBLIC_BASE_URL; if (pub) try { d.add(new URL(pub).host); } catch {}
   for (const x of (process.env.SIWE_EXTRA_DOMAINS ?? "").split(",").map(s => s.trim()).filter(Boolean)) d.add(x);
   if (!d.size && req.get("host")) d.add(String(req.get("host")));    // dev/test only: no configured public origin
   return d;
 }
+/** 128 bits from crypto.randomBytes, hex (EIP-4361: alphanumeric, >= 8 chars). Independent per call. */
+export const newNonceValue = () => randomBytes(16).toString("hex");
 async function newNonce() {
-  const nonce = generateSiweNonce(), exp = new Date(Date.now() + NONCE_TTL_MS);
+  // NOT viem's generateSiweNonce(): it is uid(96), a 256-byte Math.random() hex buffer read through a window that slides
+  // by ONE char per call, so consecutive nonces overlap by 95 chars (predictable). Independent 128-bit CSPRNG value instead.
+  const nonce = newNonceValue(), exp = new Date(Date.now() + NONCE_TTL_MS);
   await q("INSERT INTO siwe_nonces(nonce, expires_at) VALUES ($1,$2)", [nonce, exp]);
   if (Math.random() < 0.05) await q("DELETE FROM siwe_nonces WHERE expires_at < now() - interval '1 day'");
   return { nonce, expires_at: exp.toISOString() };
@@ -181,7 +188,7 @@ export async function createSuggestion(body: any, submitter: string | null, ip: 
   const dupSug = dupListing ? null : (await q(`SELECT suggestion_id FROM listing_suggestions WHERE url_norm=$1 AND state = ANY($2) ORDER BY created_at LIMIT 1`, [v.norm, OPEN_STATES]))[0]?.suggestion_id;
   const state = dupListing || dupSug ? "duplicate" : "submitted";
   const detail = dupListing ? { note: "already in the catalogue" } : dupSug ? { note: "already suggested; being processed" } : { note: "awaiting review" };
-  const claim = claim_wallet ? { status: "unclaimed", token: randomBytes(12).toString("hex") } : null;
+  const claim = claim_wallet ? { status: "unclaimed", token: randomBytes(16).toString("hex") } : null;
   const r = (await q(`INSERT INTO listing_suggestions(suggestion_id,url,url_norm,type,name,description,contact,claim_wallet,submitter_address,submitter_ip_hash,state,detail,duplicate_of,claim)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
     [id, v.url, v.norm, v.type, v.name, v.description, v.contact, claim_wallet, submitter, sha256("ip:" + ip).slice(0, 32), state, detail, dupListing ?? dupSug ?? null, claim]))[0];
@@ -285,7 +292,7 @@ export function portalRouter() {
   r.get("/v1/auth/siwe/nonce", h(async (req, res) => {
     try { rateLimit("nonce:" + clientIp(req), 30, 60_000); } catch (e) { return limited(res, e); }
     const n = await newNonce(); const domain = [...siweDomains(req)][0];
-    res.json({ ...n, domain, uri: process.env.PUBLIC_BASE_URL?.replace(/\/$/, "") || `${req.protocol}://${domain}`, chain_id: 84532, version: "1", statement: SIWE_STATEMENT,
+    res.json({ ...n, domain, uri: process.env.SIWE_DOMAIN ? `https://${domain}` : process.env.PUBLIC_BASE_URL?.replace(/\/$/, "") || `${req.protocol}://${domain}`, chain_id: 84532, version: "1", statement: SIWE_STATEMENT,
       resources: ROLES.map(x => `botiny:role:${x}`), allowed_chain_ids: [...TESTNET_IDS] });
   }));
   r.post("/v1/auth/siwe/verify", h(async (req, res) => {
@@ -294,7 +301,7 @@ export function portalRouter() {
     const asked = v.resources.map((x: string) => /^botiny:role:(bot_owner|advertiser)$/.exec(x)?.[1]).filter(Boolean) as string[];
     const want = asked.length ? [...new Set(asked)] : ["bot_owner"];
     let advertiser_id = await advertiserOfWallet(v.address), link_error: any = null;
-    if (req.body?.api_key != null) { try { advertiser_id = await linkKey(v.address, req.body.api_key); } catch (e: any) { link_error = { error: e.message, code: e.code }; } }
+    if (req.body?.api_key != null) { try { advertiser_id = await linkKey(v.address, req.body.api_key); } catch (e: any) { link_error = { error: e.code ?? "advertiser_link_failed", message: e.message }; } }
     const roles = want.filter(x => x !== "advertiser" || advertiser_id);
     if (!roles.length) roles.push("bot_owner");
     const token = "bts_" + randomBytes(32).toString("base64url"), exp = new Date(Date.now() + SESSION_TTL_MS);
@@ -323,6 +330,7 @@ export function portalRouter() {
   // --- suggestions ---
   r.post("/v1/suggestions", h(async (req, res) => {
     const s = await sessionOf(req), ip = clientIp(req);
+    if (s?.via === "cookie" && !req.get("X-Botiny-Client")) throw err(403, "X-Botiny-Client header required for cookie-authenticated writes", "csrf");
     try { rateLimit("sug-ip:" + ip, Number(process.env.SUGGEST_RATE_IP ?? 5), 10 * 60_000); if (s) rateLimit("sug-addr:" + s.address, 20, 60 * 60_000); } catch (e) { return limited(res, e); }
     const row = await createSuggestion(req.body, s?.address ?? null, ip);
     res.status(201).json(await suggestionView(row, true));

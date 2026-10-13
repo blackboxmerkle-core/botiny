@@ -66,5 +66,5 @@ test("rejections: missing ToS, unbound ToS, replayed payment, unsupported networ
   assert.ok(again.status === 409 || (again.status === 402 && /nonce_reused/.test(again.error)), JSON.stringify(again));
   const p = JSON.parse(Buffer.from(H["X-PAYMENT"], "base64").toString()); p.network = "eip155:8453";
   const main = await send({ "X-PAYMENT": Buffer.from(JSON.stringify(p)).toString("base64"), "X-TOS-ACCEPT": H["X-TOS-ACCEPT"], "X-TOS-SALT": H["X-TOS-SALT"] });
-  assert.match(main.error, /unsupported network/);
+  assert.match(main.message, /unsupported network/);
 });

@@ -27,6 +27,8 @@ export function createApp() {
   const app = express();
   app.use(express.json({ limit: "64kb", verify: (req: any, _res, buf) => { req.rawBody = buf.toString("utf8"); } }));
   app.use(apiLogger());
+  app.use(errorShape());                                          // every error body => {error: <code>, message, ...extra}
+  app.use("/portal", portalStatic());                             // portal front end, same origin (no CORS)
   app.use("/dashboard", basicAuth(), dashboardRouter()); // HTTP basic auth (admin / DASHBOARD_PASSWORD)
   app.use("/dashboard", basicAuth(), suggestionsAdminRouter());   // listing-suggestion review (admin)
   app.use(portalRouter());                                         // human portal: SIWE, suggestions, bot-owner monitoring
@@ -154,7 +156,7 @@ export function createApp() {
     const m = /^Bearer (\S+)$/.exec(req.get("authorization") ?? "");
     const a = m && !m[1].startsWith("bts_") ? await advertiserByKey(m[1]) : null;
     if (!a) { const sa = await sessionAdvertiser(req); if (sa) { res.locals.adv = sa; res.locals.adv_via = "siwe"; return next(); } }
-    if (!a) return res.status(401).json({ error: "advertiser API key required (Authorization: Bearer ...)" });
+    if (!a) return res.status(401).json({ error: "advertiser_auth_required", message: "Advertiser authentication required: send an advertiser API key (Authorization: Bearer adv_...) or use a SIWE session whose wallet is linked to an advertiser (POST /v1/advertisers/me/link-key)." });
     res.locals.adv = a.advertiser_id; next();
   };
   app.get("/v1/advertisers/me", advAuth, async (_req, res) => res.json(await advertiserSummary(res.locals.adv)));
@@ -216,7 +218,7 @@ export function createApp() {
       const engine = await pgEngine(pool);
       const { verifySignedRequest } = await import(require("node:url").pathToFileURL(require("node:path").join(__dirname, "..", "..", "click-server", "src", "binding.js")).href);
       const a = await verifySignedRequest({ method: "GET", path: "/v1/bots/me/earnings", headers: req.headers, body: "", cfg: { ...engine.cfg, allowUnsignedBotRequests: false }, verifyMessage: engine.verifyMessage, store: engine.store });
-      if (!a.ok) return res.status(401).json({ error: a.error });
+      if (!a.ok) return res.status(401).json({ error: "wallet_required", message: `Bot wallet required: sign the request (X-Bot-Wallet / X-Bot-Signature / X-Bot-Timestamp) or use a SIWE portal session (${a.error})` });
       res.json(await earnings(a.wallet));
     } catch (e) { fail(res, e); }
   });
@@ -245,7 +247,46 @@ export function createApp() {
       res.json({ advertiser_id: res.locals.adv, credited_atomic: amt, settle_tx: s.tx, mode: pay.mode, network: pay.network, settle_via: s.via, tos: { version: tos.tos_version, sha256: tos.tos_hash }, ...c });
     } catch (e) { fail(res, e); }
   });
+  app.use((req, res) => { res.status(404).json({ error: "not_found", message: `no route ${req.method} ${req.path}` }); });
+  app.use((e: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    const status = e?.status ?? e?.statusCode ?? 500; res.locals.error = String(e?.message ?? e);
+    res.status(status).json({ error: e?.type === "entity.parse.failed" ? "invalid_json" : e?.code && typeof e.code === "string" && /^[a-z_]+$/.test(e.code) ? e.code : ERROR_CODES[status] ?? "internal_error", message: status >= 500 ? "internal error" : String(e?.message ?? e) });
+  });
   return app;
+}
+/** Default machine codes by HTTP status (used when a handler only supplied a human message). */
+export const ERROR_CODES: Record<number, string> = { 400: "bad_request", 401: "unauthorized", 402: "payment_required", 403: "forbidden", 404: "not_found", 409: "conflict", 413: "payload_too_large", 422: "unprocessable", 429: "rate_limited", 500: "internal_error", 502: "bad_gateway", 503: "unavailable" };
+const CODE_RE = /^[a-z][a-z0-9_]*$/;
+/** Normalise every JSON error body to {error: <code>, message, ...rest}. Handlers may send {error: code, message},
+ *  {error: message, code} (portal helpers) or legacy {error: message}; the code then defaults from the status. */
+function errorShape(): express.RequestHandler {
+  return (_req, res, next) => {
+    const json = res.json.bind(res);
+    res.json = (body: any) => {
+      if (res.statusCode >= 400 && body && typeof body === "object" && !Array.isArray(body) && "error" in body) {
+        const { error, code, message, ...rest } = body;
+        const isCode = typeof error === "string" && CODE_RE.test(error) && message !== undefined;
+        const lead = !isCode && typeof error === "string" ? /(?:^|:\s)([a-z][a-z0-9]*_[a-z0-9_]+)(?::|$)/.exec(error)?.[1] : undefined;   // "tos_missing: ..." => tos_missing
+        const c = isCode ? error : typeof code === "string" && CODE_RE.test(code) ? code : lead ?? ERROR_CODES[res.statusCode] ?? "error";
+        const m = isCode ? String(message) : String(message ?? error ?? c);
+        return json({ error: c, message: m, ...rest });
+      }
+      return json(body);
+    };
+    next();
+  };
+}
+/** Serves the portal front end (PORTAL_APP_DIR, default ../botiny-brand/portal-app) at /portal: only *.html and assets/. */
+function portalStatic(): express.RequestHandler {
+  const { resolve, join: pj } = require("node:path");
+  const dir = resolve(process.env.PORTAL_APP_DIR ?? pj(__dirname, "..", "..", "..", "botiny-brand", "portal-app"));
+  const stat = express.static(dir, { index: "index.html", dotfiles: "deny", fallthrough: true, maxAge: 0 });
+  return (req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return next();
+    if (req.path !== "/" && !/^\/[A-Za-z0-9_-]+\.html$/.test(req.path) && !/^\/assets\/[A-Za-z0-9_.-]+\.(js|css|svg|png|ico|woff2?)$/.test(req.path)) return next();
+    res.set("X-Content-Type-Options", "nosniff").set("Referrer-Policy", "same-origin").set("X-Frame-Options", "DENY");
+    stat(req, res, next);
+  };
 }
 
 /** x402 + ToS gate: 402 with accepts (one per active EVM chain) + ToS; ToS acceptance must be bound into the EIP-3009 nonce. */
