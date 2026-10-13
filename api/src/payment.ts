@@ -1,3 +1,4 @@
+import { isAmbiguousSettleError } from "./facilitator";
 import { sha256 } from "./canonical";
 import { getAddress } from "viem";
 import { pool } from "./db";
@@ -79,7 +80,7 @@ export async function settlePayment(p: Verified): Promise<SettleResult> {
     return { ok: s.success, tx: s.transaction || undefined, via: "facilitator-fallback", header: Buffer.from(JSON.stringify({ ...s, settledBy: "x402.org-fallback" })).toString("base64"),
       error: s.success ? undefined : "fallback facilitator: " + String((s as any).errorReason ?? (s as any).error ?? "unknown").slice(0, 400),
       // an explicit facilitator rejection reason is definite; no reason / unexpected / a tx hash without success is ambiguous
-      ambiguous: !s.success && (!!s.transaction || !(s as any).errorReason || /unexpected|timeout|unknown|network/i.test(String((s as any).errorReason))) };
+      ambiguous: !s.success && (!(s as any).errorReason ? true : isAmbiguousSettleError(String((s as any).errorReason), s.transaction || null)) };
   }
   const s = await settleExact(p.payload!, p.chain!);
   return { ...s, via: "self", header: Buffer.from(JSON.stringify({ success: s.ok, transaction: s.tx ?? "", network: p.network, payer: p.payer, settledBy: "self" })).toString("base64") };

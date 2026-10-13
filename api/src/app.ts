@@ -105,11 +105,12 @@ export function createApp() {
       await client.query(
         `INSERT INTO requests(request_id,catalogue_seq,embedding_model,ranker_version,request_canonical,request_hash,
            response_canonical,response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_ref,payment_status,bot_id,settings_version,market_seq,
-           payment_chain_id,settle_via,tos_version,tos_hash,tos_proof,pay_to)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'verified',$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+           payment_chain_id,settle_via,tos_version,tos_hash,tos_proof,pay_to,payment_valid_before)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'verified',$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
         [request_id, seq, EMBEDDING_MODEL, RANKER_VERSION, reqCanon, sha256(reqCanon), out.canonical, out.hash,
          pay.payer, pay.mode, pay.network, pay.amount.toString(), pay.ref, botId(req), settings_version, mseq,
-         pay.chainId, pay.settle_via, tos.tos_version, tos.tos_hash, tos.proof, pay.payTo]);
+         pay.chainId, pay.settle_via, tos.tos_version, tos.tos_hash, tos.proof, pay.payTo,
+         pay.mode === "x402" ? Number((pay as any).payload?.payload?.authorization?.validBefore ?? 0) || null : null]);   // always stored (needed to ever compensate)
       await reserveNonce(client, pay);   // same tx: replayed EIP-3009 nonce => 23505 => 409
       const debited: string[] = [];
       for (let i = 0; i < out.meta.length; i++) {
@@ -157,6 +158,16 @@ export function createApp() {
     res.json({ request_id, response_hash: out.hash, response: out.body, click_links, payment: { network: pay.network, settle_tx: s.tx ?? null, settle_via: s.via }, tos: { version: tos.tos_version, sha256: tos.tos_hash, proof: tos.proof } });
   });
 
+  // Result content (impressions, request/response bodies, payment details) is public only once the payment SETTLED, or to the
+  // proven payer: X-Payer-Signature = EIP-191 personal_sign over `botiny:request:<request_id>:<X-Payer-Timestamp>` (unix s, ±300 s).
+  const payerProved = async (req: express.Request, r: any) => {
+    const sig = req.get("x-payer-signature"), ts = Number(req.get("x-payer-timestamp"));
+    if (!sig || !r.payer || !Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > 300 || !/^0x[0-9a-fA-F]{130}$/.test(sig)) return false;
+    try { const { verifyMessage } = await import("viem");
+      return await verifyMessage({ address: r.payer as `0x${string}`, message: `botiny:request:${r.request_id}:${ts}`, signature: sig as `0x${string}` }); } catch { return false; }
+  };
+  const fullView = async (req: express.Request, r: any) => r.payment_status === "settled" || await payerProved(req, r);
+
   app.get("/v1/requests/:id/replay", limit("replay", 120), async (req, res) => {
     const r = (await pool.query("SELECT * FROM requests WHERE request_id=$1", [req.params.id])).rows[0];
     if (!r) return res.status(404).json({ error: "not found" });
@@ -164,21 +175,27 @@ export function createApp() {
     try {
       const out = await rank(pool, { query: p.query, k: p.k, catalogue_seq: Number(r.catalogue_seq), embedding_model: r.embedding_model, ranker_version: r.ranker_version,
         market_seq: r.market_seq == null ? undefined : Number(r.market_seq), settings_version: r.settings_version ?? undefined, pacing_at_ms: p.pacing_at_ms });
-      res.json({ request_id: r.request_id, logged_hash: r.response_hash, replayed_hash: out.hash, match: out.hash === r.response_hash,
-        request_hash_ok: sha256(r.request_canonical) === r.request_hash, catalogue_seq: Number(r.catalogue_seq),
+      const base = { request_id: r.request_id, logged_hash: r.response_hash, replayed_hash: out.hash, match: out.hash === r.response_hash, result: out.hash === r.response_hash ? "MATCH" : "MISMATCH",
+        request_hash_ok: sha256(r.request_canonical) === r.request_hash, payment_status: r.payment_status };
+      if (!(await fullView(req, r))) return res.json({ ...base, restricted: true });
+      res.json({ ...base, catalogue_seq: Number(r.catalogue_seq),
         market_seq: r.market_seq == null ? null : Number(r.market_seq), settings_version: r.settings_version, ranker_version: r.ranker_version,
         tos: r.tos_version == null ? null : { version: r.tos_version, sha256: r.tos_hash, proof: r.tos_proof }, payment: { network: r.payment_network, chain_id: r.payment_chain_id, settle_tx: r.settle_tx, settle_via: r.settle_via, pay_to: r.pay_to } });
     } catch (e: any) { console.error("replay", r.request_id, e?.stack ?? e); res.status(409).json({ error: "replay_failed", message: "replay could not be computed for this request" }); }
   });
 
   app.get("/v1/requests/:id", limit("request", 600), async (req, res) => {
-    // PUBLIC (bots verify with it): payer is redacted to a short form + salted-free sha256 (match your own wallet), no settle_error, no db_txid.
+    // PUBLIC (bots verify with it): payer is redacted to a short form + sha256 (match your own wallet), no settle_error, no db_txid.
+    // Unsettled requests expose only hashes/status unless the caller proves to be the payer (see fullView).
     const r = (await pool.query(`SELECT request_id,received_at,catalogue_seq,market_seq,settings_version,embedding_model,ranker_version,request_canonical,request_hash,
       response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_status,billing_status,settle_tx,bot_id,payment_chain_id,settle_via,tos_version,tos_hash,tos_proof,pay_to FROM requests WHERE request_id=$1`, [req.params.id])).rows[0];
     if (!r) return res.status(404).json({ error: "not found" });
-    const imp = (await pool.query("SELECT rank,listing_id,provider_id,sponsored,fixed_atomic,bid_atomic,charge_micro_usdc FROM impressions WHERE request_id=$1 ORDER BY rank", [req.params.id])).rows;
     const { payer, ...pub } = r;
-    res.json({ ...pub, payer: redactPayer(payer), payer_sha256: payer ? sha256(String(payer).toLowerCase()) : null, impressions: imp });
+    const id = { payer: redactPayer(payer), payer_sha256: payer ? sha256(String(payer).toLowerCase()) : null };
+    if (!(await fullView(req, r))) return res.json({ request_id: r.request_id, received_at: r.received_at, payment_status: r.payment_status, request_hash: r.request_hash, response_hash: r.response_hash, ...id, restricted: true,
+      message: "results are shown once payment settled, or to the payer (X-Payer-Signature over botiny:request:<id>:<X-Payer-Timestamp>)" });
+    const imp = (await pool.query("SELECT rank,listing_id,provider_id,sponsored,fixed_atomic,bid_atomic,charge_micro_usdc FROM impressions WHERE request_id=$1 ORDER BY rank", [req.params.id])).rows;
+    res.json({ ...pub, ...id, impressions: imp });
   });
   app.get("/v1/audit/providers/:id", basicAuth(), async (req, res) => {
     const rows = (await pool.query(`SELECT i.listing_id, COUNT(*)::int AS impressions, COUNT(*) FILTER (WHERE sponsored)::int AS sponsored, SUM(i.charge_micro_usdc)::text AS spend_micro_usdc

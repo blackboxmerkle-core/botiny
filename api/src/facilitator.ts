@@ -89,6 +89,7 @@ export async function verifyExact(p: ExactPayload, c: EvmChain, req: { amount: b
   if (BigInt(a.value) < req.amount) return { ok: false, reason: `insufficient_amount: ${a.value} < ${req.amount}` };
   if (BigInt(a.validAfter) > BigInt(now)) return { ok: false, reason: "not_yet_valid: validAfter in the future" };
   if (BigInt(a.validBefore) <= BigInt(now + 6)) return { ok: false, reason: "expired: validBefore passed (or < 6s left to settle)" };
+  if (BigInt(a.validBefore) > BigInt(now + MAX_VALID_BEFORE_S())) return { ok: false, reason: `invalid_valid_before: validBefore must be at most now+${MAX_VALID_BEFORE_S()}s` };
   let signer: string;
   try {
     signer = await recoverTypedDataAddress({ domain: { name: c.eip712.name, version: c.eip712.version, chainId: c.chainId, verifyingContract: c.usdc },
@@ -109,8 +110,15 @@ export async function verifyExact(p: ExactPayload, c: EvmChain, req: { amount: b
 /** Errors that prove the transfer did NOT and can not happen from this attempt (simulation revert, bad signature,
  *  nonce already used, no gas). Everything else (timeouts, network errors, a tx hash without a receipt) is AMBIGUOUS:
  *  the authorization may have been broadcast, so the outcome is settled later from authorizationState on-chain. */
-export const DEFINITE_SETTLE_ERROR = /revert|execution reverted|insufficient funds|invalid signature|authorization is (used|expired|not yet valid)|nonce|FiatTokenV2|refusing to settle on mainnet|not configured/i;
+export const DEFINITE_SETTLE_ERROR = /revert|execution reverted|insufficient[ _-]?(funds|balance)|transfer amount exceeds balance|invalid[ _-]?signature|invalid_exact|authorization is (used|expired|not yet valid)|nonce (already )?used|already used|nonce|expired|missing or invalid parameters|invalid[ _-]?param|invalid_payload|invalid_payment|FiatTokenV2|refusing to settle on mainnet|not configured/i;
 export const AMBIGUOUS_SETTLE_ERROR = /timeout|timed out|took too long|ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|socket|network|fetch failed|HTTP request failed|aborted|503|502|504|rate limit|429/i;
+/** Shared classifier: a known permanent rejection (and no broadcast tx) is definite; everything else is ambiguous. */
+export function isAmbiguousSettleError(msg: string, tx?: string | null) {
+  if (tx) return true;                                   // broadcast: outcome unknown until the chain says so
+  if (DEFINITE_SETTLE_ERROR.test(msg)) return false;     // permanent: invalid signature, balance, nonce used, bad params, expired
+  return true;                                           // timeouts, network, unclassified
+}
+export const MAX_VALID_BEFORE_S = () => Number(process.env.X402_MAX_VALID_BEFORE_S ?? 600);
 export async function settleExact(p: ExactPayload, c: EvmChain, rpc: ChainRpc = rpcFor(c)): Promise<{ ok: boolean; tx?: string; error?: string; ambiguous?: boolean }> {
   let tx: string | undefined;
   try {
@@ -120,7 +128,7 @@ export async function settleExact(p: ExactPayload, c: EvmChain, rpc: ChainRpc = 
   } catch (e: any) {
     const msg = String(e?.shortMessage ?? e?.details ?? e?.message ?? e).slice(0, 480);
     // a tx hash exists but no receipt => broadcast, outcome unknown. Before broadcast: definite only for known rejection classes.
-    const ambiguous = !!tx || AMBIGUOUS_SETTLE_ERROR.test(msg) || !DEFINITE_SETTLE_ERROR.test(msg);
+    const ambiguous = isAmbiguousSettleError(msg, tx);
     return { ok: false, tx, error: msg, ambiguous };
   }
 }

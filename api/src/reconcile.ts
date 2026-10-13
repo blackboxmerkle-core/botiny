@@ -46,17 +46,23 @@ let checker: AuthChecker = defaultChecker;
 export const _setAuthChecker = (f: AuthChecker | null) => { checker = f ?? defaultChecker; };
 const GRACE_S = 60;
 const nowS = () => Math.floor(Date.now() / 1000);
-const expired = (validBefore: number | null, createdAt: Date) => validBefore != null ? nowS() > validBefore + GRACE_S : Date.now() - createdAt.getTime() > 30 * 60_000;
+// Never compensate without a known validBefore: legacy rows without it go to admin review instead (no time-based fallback).
+const expired = (validBefore: number | null) => validBefore != null && nowS() > validBefore + GRACE_S;
+export const STALE_VERIFIED_MIN = () => Number(process.env.SETTLE_STALE_VERIFIED_MIN ?? 10);
 
 async function resolveRequest(r: any) {
   let used: boolean | null = null, err: string | null = null;
   try { used = await checker({ request_id: r.request_id, mode: r.payment_mode, chain_id: r.payment_chain_id, payer: r.payer, nonce: r.nonce, tx: r.settle_tx }); } catch (e: any) { err = String(e?.shortMessage ?? e?.message ?? e).slice(0, 300); }
   await pool.query("UPDATE requests SET settle_checks=settle_checks+1, settle_checked_at=now() WHERE request_id=$1", [r.request_id]);
   if (used === true) {
-    await pool.query("UPDATE requests SET payment_status='settled', settle_error=NULL, settle_tx=COALESCE(settle_tx,'reconciled:authorizationState') WHERE request_id=$1 AND payment_status='settle_unknown'", [r.request_id]);
+    await pool.query("UPDATE requests SET payment_status='settled', settle_error=NULL, settle_review=false, settle_tx=COALESCE(settle_tx,'reconciled:authorizationState') WHERE request_id=$1 AND payment_status IN ('settle_unknown','verified')", [r.request_id]);
     return "settled";
   }
-  if (used === false && expired(r.payment_valid_before == null ? null : Number(r.payment_valid_before), new Date(r.received_at))) {
+  if (used === false && r.payment_valid_before == null) {
+    await pool.query("UPDATE requests SET settle_review=true WHERE request_id=$1", [r.request_id]);
+    return "review";
+  }
+  if (used === false && expired(Number(r.payment_valid_before))) {
     const out = await recordSettlement(r.request_id, { ok: false, ambiguous: false, error: `reconciled: authorization unused and expired (was: ${String(r.settle_error ?? "").slice(0, 200)})`, via: r.settle_via, tx: r.settle_tx ?? undefined });
     return out.status;
   }
@@ -75,7 +81,8 @@ async function resolveTopup(t: any) {
     await pool.query("UPDATE topup_pending SET state='credited', resolved_at=now() WHERE payment_ref=$1", [t.payment_ref]);
     return "credited";
   }
-  if (used === false && expired(t.valid_before == null ? null : Number(t.valid_before), new Date(t.created_at))) {
+  if (used === false && t.valid_before == null) { await pool.query("UPDATE topup_pending SET state='review', last_error='admin review: no validBefore' WHERE payment_ref=$1", [t.payment_ref]); return "review"; }
+  if (used === false && expired(Number(t.valid_before))) {
     await pool.query("UPDATE topup_pending SET state='failed', resolved_at=now() WHERE payment_ref=$1", [t.payment_ref]); return "failed";
   }
   return "pending";
@@ -87,11 +94,12 @@ export async function sweep(limit = 200) {
   if (running) return { skipped: "busy" };
   running = true;
   try {
-    const out = { unknown_settled: 0, unknown_failed: 0, unknown_pending: 0, compensated: 0, topups_credited: 0, topups_failed: 0 };
+    const out = { unknown_settled: 0, unknown_failed: 0, unknown_pending: 0, review: 0, compensated: 0, topups_credited: 0, topups_failed: 0 };
     const unk = (await pool.query(`SELECT r.request_id, r.payment_mode, r.payment_chain_id, r.payer, r.settle_tx, r.settle_error, r.settle_via, r.payment_valid_before, r.received_at, n.nonce
         FROM requests r LEFT JOIN payment_nonces n ON n.payment_ref = r.payment_ref
-       WHERE r.payment_status='settle_unknown' ORDER BY r.received_at LIMIT $1`, [limit])).rows;
-    for (const r of unk) { const s = await resolveRequest(r); if (s === "settled") out.unknown_settled++; else if (s === "settle_failed") out.unknown_failed++; else out.unknown_pending++; }
+       WHERE (r.payment_status='settle_unknown' OR (r.payment_status='verified' AND r.received_at < now() - make_interval(mins => $2)))
+         AND NOT r.settle_review ORDER BY r.received_at LIMIT $1`, [limit, STALE_VERIFIED_MIN()])).rows;
+    for (const r of unk) { const s = await resolveRequest(r); if (s === "settled") out.unknown_settled++; else if (s === "settle_failed") out.unknown_failed++; else if (s === "review") out.review++; else out.unknown_pending++; }
     for (const { request_id } of (await pool.query("SELECT request_id FROM requests WHERE payment_status='settle_failed' AND billing_status='billed' ORDER BY received_at LIMIT $1", [limit])).rows)
       if ((await voidUnbilledRequest(request_id)).voided) out.compensated++;
     for (const t of (await pool.query("SELECT * FROM topup_pending WHERE state='unknown' ORDER BY created_at LIMIT $1", [limit])).rows) {
