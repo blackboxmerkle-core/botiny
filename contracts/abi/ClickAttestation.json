@@ -1,0 +1,448 @@
+{
+ "contractName": "ClickAttestation",
+ "compiler": "solc 0.8.26, optimizer 10000, evm shanghai",
+ "abi": [
+  {
+   "type": "constructor",
+   "inputs": [
+    {
+     "name": "attester",
+     "type": "address",
+     "internalType": "address"
+    }
+   ],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "function",
+   "name": "CLAWED",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint8",
+     "internalType": "uint8"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "FILTERED",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint8",
+     "internalType": "uint8"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "HELD",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint8",
+     "internalType": "uint8"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "MAX_STATUS",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint8",
+     "internalType": "uint8"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "PAID",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint8",
+     "internalType": "uint8"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "VESTED",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint8",
+     "internalType": "uint8"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "attestBatch",
+   "inputs": [
+    {
+     "name": "items",
+     "type": "tuple[]",
+     "internalType": "struct ClickAttestation.ClickIn[]",
+     "components": [
+      {
+       "name": "linkHash",
+       "type": "bytes32",
+       "internalType": "bytes32"
+      },
+      {
+       "name": "clickHash",
+       "type": "bytes32",
+       "internalType": "bytes32"
+      },
+      {
+       "name": "campaignHash",
+       "type": "bytes32",
+       "internalType": "bytes32"
+      },
+      {
+       "name": "status",
+       "type": "uint8",
+       "internalType": "uint8"
+      },
+      {
+       "name": "reason",
+       "type": "uint16",
+       "internalType": "uint16"
+      },
+      {
+       "name": "at",
+       "type": "uint64",
+       "internalType": "uint64"
+      }
+     ]
+    }
+   ],
+   "outputs": [
+    {
+     "name": "written",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "function",
+   "name": "clickCount",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "isAttester",
+   "inputs": [
+    {
+     "name": "",
+     "type": "address",
+     "internalType": "address"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "",
+     "type": "bool",
+     "internalType": "bool"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "owner",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "address",
+     "internalType": "address"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "setAttester",
+   "inputs": [
+    {
+     "name": "a",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "allowed",
+     "type": "bool",
+     "internalType": "bool"
+    }
+   ],
+   "outputs": [],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "function",
+   "name": "statusOf",
+   "inputs": [
+    {
+     "name": "clickHash",
+     "type": "bytes32",
+     "internalType": "bytes32"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint8",
+     "internalType": "uint8"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "transferOwnership",
+   "inputs": [
+    {
+     "name": "o",
+     "type": "address",
+     "internalType": "address"
+    }
+   ],
+   "outputs": [],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "function",
+   "name": "updateStatusBatch",
+   "inputs": [
+    {
+     "name": "items",
+     "type": "tuple[]",
+     "internalType": "struct ClickAttestation.StatusIn[]",
+     "components": [
+      {
+       "name": "clickHash",
+       "type": "bytes32",
+       "internalType": "bytes32"
+      },
+      {
+       "name": "campaignHash",
+       "type": "bytes32",
+       "internalType": "bytes32"
+      },
+      {
+       "name": "status",
+       "type": "uint8",
+       "internalType": "uint8"
+      },
+      {
+       "name": "reason",
+       "type": "uint16",
+       "internalType": "uint16"
+      },
+      {
+       "name": "at",
+       "type": "uint64",
+       "internalType": "uint64"
+      }
+     ]
+    }
+   ],
+   "outputs": [
+    {
+     "name": "written",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "event",
+   "name": "AttesterSet",
+   "inputs": [
+    {
+     "name": "attester",
+     "type": "address",
+     "indexed": true,
+     "internalType": "address"
+    },
+    {
+     "name": "allowed",
+     "type": "bool",
+     "indexed": false,
+     "internalType": "bool"
+    }
+   ],
+   "anonymous": false
+  },
+  {
+   "type": "event",
+   "name": "Click",
+   "inputs": [
+    {
+     "name": "linkHash",
+     "type": "bytes32",
+     "indexed": true,
+     "internalType": "bytes32"
+    },
+    {
+     "name": "clickHash",
+     "type": "bytes32",
+     "indexed": true,
+     "internalType": "bytes32"
+    },
+    {
+     "name": "campaignHash",
+     "type": "bytes32",
+     "indexed": true,
+     "internalType": "bytes32"
+    },
+    {
+     "name": "status",
+     "type": "uint8",
+     "indexed": false,
+     "internalType": "uint8"
+    },
+    {
+     "name": "reason",
+     "type": "uint16",
+     "indexed": false,
+     "internalType": "uint16"
+    },
+    {
+     "name": "at",
+     "type": "uint64",
+     "indexed": false,
+     "internalType": "uint64"
+    }
+   ],
+   "anonymous": false
+  },
+  {
+   "type": "event",
+   "name": "OwnerChanged",
+   "inputs": [
+    {
+     "name": "owner",
+     "type": "address",
+     "indexed": true,
+     "internalType": "address"
+    }
+   ],
+   "anonymous": false
+  },
+  {
+   "type": "event",
+   "name": "StatusUpdate",
+   "inputs": [
+    {
+     "name": "clickHash",
+     "type": "bytes32",
+     "indexed": true,
+     "internalType": "bytes32"
+    },
+    {
+     "name": "campaignHash",
+     "type": "bytes32",
+     "indexed": true,
+     "internalType": "bytes32"
+    },
+    {
+     "name": "status",
+     "type": "uint8",
+     "indexed": false,
+     "internalType": "uint8"
+    },
+    {
+     "name": "reason",
+     "type": "uint16",
+     "indexed": false,
+     "internalType": "uint16"
+    },
+    {
+     "name": "at",
+     "type": "uint64",
+     "indexed": false,
+     "internalType": "uint64"
+    }
+   ],
+   "anonymous": false
+  },
+  {
+   "type": "error",
+   "name": "BadStatus",
+   "inputs": [
+    {
+     "name": "status",
+     "type": "uint8",
+     "internalType": "uint8"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "CampaignMismatch",
+   "inputs": [
+    {
+     "name": "clickHash",
+     "type": "bytes32",
+     "internalType": "bytes32"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "NotAttester",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "NotOwner",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "UnknownClick",
+   "inputs": [
+    {
+     "name": "clickHash",
+     "type": "bytes32",
+     "internalType": "bytes32"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "ZeroHash",
+   "inputs": []
+  }
+ ],
+ "bytecode": "0x608060405234801561000f575f80fd5b50604051610c69380380610c6983398101604081905261002e916100d4565b5f80546001600160a01b03191633908117825560405190917fa2ea9883a321a3e97b8266c2b078bfeec6d50c711ed71f874a90d500ae2eaf3691a26001600160a01b038116156100ce576001600160a01b0381165f81815260016020818152604092839020805460ff19168317905591519081527fe282e8f39d469f44e202567418af903a001092d0eaa89b1070c44d3f01c0db2a910160405180910390a25b50610101565b5f602082840312156100e4575f80fd5b81516001600160a01b03811681146100fa575f80fd5b9392505050565b610b5b8061010e5f395ff3fe608060405234801561000f575f80fd5b50600436106100e5575f3560e01c8063b6ebe53911610088578063d31a03c211610063578063d31a03c2146101ec578063df1ae7e4146101f4578063e3e751fe146101fc578063f2fde38b1461020f575f80fd5b8063b6ebe53914610193578063c4e18681146101c5578063c7df14e2146101cd575f80fd5b80636e76a585116100c35780636e76a5851461013e57806372c628ef146100e95780638da5cb5b14610147578063a4b55e4e1461018b575f80fd5b80632e618ab9146100e95780635c0204d91461010857806360c680b81461011d575b5f80fd5b6100f1600581565b60405160ff90911681526020015b60405180910390f35b61011b6101163660046108d1565b610222565b005b61013061012b36600461090a565b6102fb565b6040519081526020016100ff565b61013060035481565b5f546101669073ffffffffffffffffffffffffffffffffffffffff1681565b60405173ffffffffffffffffffffffffffffffffffffffff90911681526020016100ff565b6100f1600281565b6101b56101a136600461097b565b60016020525f908152604090205460ff1681565b60405190151581526020016100ff565b6100f1600481565b6100f16101db36600461099b565b5f9081526002602052604090205490565b6100f1600181565b6100f1600381565b61013061020a3660046109b2565b61056e565b61011b61021d36600461097b565b6107ed565b5f5473ffffffffffffffffffffffffffffffffffffffff163314610272576040517f30cd747100000000000000000000000000000000000000000000000000000000815260040160405180910390fd5b73ffffffffffffffffffffffffffffffffffffffff82165f8181526001602090815260409182902080547fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff001685151590811790915591519182527fe282e8f39d469f44e202567418af903a001092d0eaa89b1070c44d3f01c0db2a910160405180910390a25050565b335f9081526001602052604081205460ff16610343576040517fcab9805400000000000000000000000000000000000000000000000000000000815260040160405180910390fd5b5f5b82811015610550573684848381811061036057610360610a13565b905060c00201905080606001602081019061037b9190610a40565b60ff16158061039c575060056103976080830160608401610a40565b60ff16115b156103ee576103b16080820160608301610a40565b6040517f831e70da00000000000000000000000000000000000000000000000000000000815260ff90911660048201526024015b60405180910390fd5b6020810135158061040157506040810135155b8061040b57508035155b15610442576040517ff1ae58d500000000000000000000000000000000000000000000000000000000815260040160405180910390fd5b6020808201355f90815260029091526040902054156104615750610548565b6104716080820160608301610a40565b6020828101355f818152600290925260409182902060ff939093167fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0092850135928316179092559082357f5fa005cdb36ad9ff9a82b8c316a7bb425eb872725be86f000bd4ef9876e8a4916104ec6080860160608701610a40565b6104fc60a0870160808801610a60565b61050c60c0880160a08901610a81565b6040805160ff909416845261ffff909216602084015267ffffffffffffffff169082015260600160405180910390a461054483610ad5565b9250505b600101610345565b508060035f8282546105629190610b0c565b90915550909392505050565b335f9081526001602052604081205460ff166105b6576040517fcab9805400000000000000000000000000000000000000000000000000000000815260040160405180910390fd5b5f5b828110156107e657368484838181106105d3576105d3610a13565b905060a0020190508060400160208101906105ee9190610a40565b60ff16158061060f5750600561060a6060830160408401610a40565b60ff16115b15610624576103b16060820160408301610a40565b80355f9081526002602052604081205490819003610671576040517f68ff2732000000000000000000000000000000000000000000000000000000008152823560048201526024016103e5565b7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff008181166020840135909116146106d7576040517f46a78e8e000000000000000000000000000000000000000000000000000000008152823560048201526024016103e5565b6106e76060830160408401610a40565b60ff168160ff16036106fa5750506107de565b61070a6060830160408401610a40565b82355f8181526002602090815260409182902060ff949094167fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0086161790935591840135917f36734055297cc8b93d3a8d00da32b21962ca52db6232b0d06ff5ff1b9e67d944906107819060608701908701610a40565b6107916080870160608801610a60565b6107a160a0880160808901610a81565b6040805160ff909416845261ffff909216602084015267ffffffffffffffff169082015260600160405180910390a36107d984610ad5565b935050505b6001016105b8565b5092915050565b5f5473ffffffffffffffffffffffffffffffffffffffff16331461083d576040517f30cd747100000000000000000000000000000000000000000000000000000000815260040160405180910390fd5b5f80547fffffffffffffffffffffffff00000000000000000000000000000000000000001673ffffffffffffffffffffffffffffffffffffffff8316908117825560405190917fa2ea9883a321a3e97b8266c2b078bfeec6d50c711ed71f874a90d500ae2eaf3691a250565b803573ffffffffffffffffffffffffffffffffffffffff811681146108cc575f80fd5b919050565b5f80604083850312156108e2575f80fd5b6108eb836108a9565b9150602083013580151581146108ff575f80fd5b809150509250929050565b5f806020838503121561091b575f80fd5b823567ffffffffffffffff811115610931575f80fd5b8301601f81018513610941575f80fd5b803567ffffffffffffffff811115610957575f80fd5b85602060c08302840101111561096b575f80fd5b6020919091019590945092505050565b5f6020828403121561098b575f80fd5b610994826108a9565b9392505050565b5f602082840312156109ab575f80fd5b5035919050565b5f80602083850312156109c3575f80fd5b823567ffffffffffffffff8111156109d9575f80fd5b8301601f810185136109e9575f80fd5b803567ffffffffffffffff8111156109ff575f80fd5b85602060a08302840101111561096b575f80fd5b7f4e487b71000000000000000000000000000000000000000000000000000000005f52603260045260245ffd5b5f60208284031215610a50575f80fd5b813560ff81168114610994575f80fd5b5f60208284031215610a70575f80fd5b813561ffff81168114610994575f80fd5b5f60208284031215610a91575f80fd5b813567ffffffffffffffff81168114610994575f80fd5b7f4e487b71000000000000000000000000000000000000000000000000000000005f52601160045260245ffd5b5f7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff8203610b0557610b05610aa8565b5060010190565b80820180821115610b1f57610b1f610aa8565b9291505056fea2646970667358221220f5be55f4220cda644f20b662627268bed00032be1531c5bd59e8bda7a9ee231564736f6c634300081a0033"
+}

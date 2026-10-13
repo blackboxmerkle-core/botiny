@@ -162,6 +162,14 @@ export function createApp() {
       if (req.query.format === "csv") { res.type("text/csv").set("Content-Disposition", `attachment; filename="incentives-${res.locals.adv.replace(/\W/g, "_")}.csv"`).send(reportCsv(r)); } else res.json(r);
     } catch (e) { fail(res, e); }
   });
+  // Public click attestation feed (SKALE Europa testnet) for this advertiser: JSON or CSV.
+  app.get("/v1/advertisers/me/attestations", advAuth, async (req, res) => {
+    try { const { advertiserFeed, feedCsv } = await import("./attest"); const f = await advertiserFeed(res.locals.adv);
+      if (req.query.format === "csv") res.type("text/csv").set("Content-Disposition", `attachment; filename="clicks-${res.locals.adv.replace(/\W/g, "_")}.csv"`).send(feedCsv(f)); else res.json(f);
+    } catch (e) { fail(res, e); }
+  });
+  app.get("/advertiser", (_req, res) => res.sendFile(require("node:path").join(__dirname, "..", "public", "advertiser.html")));
+  app.post("/v1/admin/attest/tick", basicAuth(), async (_req, res) => { try { res.json(await (await import("./attest")).attestTick()); } catch (e) { fail(res, e); } });
   app.put("/v1/advertisers/me/listings/:lid/incentive", advAuth, async (req, res) => {
     try { res.json(await setIncentive(String(req.params.lid), { show_atomic: req.body?.show_atomic, click_atomic: req.body?.click_atomic, budget_atomic: req.body?.budget_atomic, expires_at: req.body?.expires_at }, "advertiser:" + res.locals.adv, res.locals.adv)); } catch (e) { fail(res, e); }
   });

@@ -1,0 +1,13 @@
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+libs = []
+solc_version = "0.8.26"
+evm_version = "shanghai"   # SKALE Europa: no PUSH0 issues on shanghai; keep conservative
+optimizer = true
+optimizer_runs = 10000
+
+[rpc_endpoints]
+skale_europa_testnet = "${SKALE_EUROPA_TESTNET_RPC}"
