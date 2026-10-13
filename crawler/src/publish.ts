@@ -13,14 +13,14 @@ export function listingDescription(it: any, sources: string[]) {
 }
 /** Append crawled items to the recommend catalogue as NEW listing rows (never edits): changed items get a new row that
  *  supersedes the previous one, so earlier requests replay against their pinned catalogue_seq unchanged. */
-export async function publish(opts: { minQuality?: number; limit?: number } = {}) {
+export async function publish(opts: { minQuality?: number; limit?: number; itemIds?: string[] } = {}) {
   const minQ = opts.minQuality ?? Number(process.env.CRAWL_PUBLISH_MIN_QUALITY ?? 45), lim = opts.limit ?? Number(process.env.CRAWL_PUBLISH_LIMIT ?? 1500);
   const rows = await q(`SELECT i.*, (SELECT array_agg(DISTINCT s.source_id ORDER BY s.source_id) FROM crawl_item_sources s WHERE s.item_id=i.item_id) srcs,
         (SELECT array_agg(DISTINCT s.licence_class) FROM crawl_item_sources s WHERE s.item_id=i.item_id) lics,
         (SELECT s.source_url FROM crawl_item_sources s WHERE s.item_id=i.item_id ORDER BY (s.licence_class='ids-only'), s.source_id LIMIT 1) src_url
       FROM crawl_items i WHERE i.status='active' AND (i.scores->>'quality')::int >= $1 AND (i.published_hash IS DISTINCT FROM i.content_hash)
-        AND (i.urls->>'primary') ~ '^https?://'
-      ORDER BY (i.scores->>'quality')::int DESC, i.item_id LIMIT $2`, [minQ, lim]);
+        AND (i.urls->>'primary') ~ '^https?://' AND ($3::text[] IS NULL OR i.item_id = ANY($3))
+      ORDER BY (i.scores->>'quality')::int DESC, i.item_id LIMIT $2`, [minQ, lim, opts.itemIds ?? null]);
   let n = 0;
   for (const it of rows) {
     const lic = (it.lics ?? []).filter((l: string) => l !== "ids-only")[0] ?? "ids-only";

@@ -163,3 +163,18 @@ test("sync run: connector pages are normalised, cursor persisted, unhealthy sour
   CONNECTORS.npm = orig;
   await assert.rejects(runSync("glama"), /disabled/);
 });
+
+test("suggestions source: disabled for scheduling; DNS guard rejects private / unresolvable hosts", async () => {
+  const { assertPublicHost, _setResolver } = await import("../src/suggest");
+  const { schedule } = await import("../src/jobs");
+  const src = (await q("SELECT enabled, licence_class FROM crawl_sources WHERE source_id='suggestions'"))[0];
+  assert.equal(src.enabled, false); assert.equal(src.licence_class, "user-submitted");
+  await schedule();
+  assert.equal((await q("SELECT count(*)::int n FROM crawl_jobs WHERE source_id='suggestions'"))[0].n, 0);
+  for (const ips of [["127.0.0.1"], ["10.0.0.5"], ["169.254.169.254"], ["::1"], ["fd00::1"], ["::ffff:127.0.0.1"], ["8.8.8.8", "192.168.1.1"]]) {
+    _setResolver(async () => ips); await assert.rejects(assertPublicHost("x.example.com"), /non-public/, ips.join(","));
+  }
+  _setResolver(async () => { throw new Error("ENOTFOUND"); }); await assert.rejects(assertPublicHost("x.example.com"), /does not resolve/);
+  _setResolver(async () => ["8.8.8.8", "2606:4700::1111"]); await assertPublicHost("x.example.com");
+  _setResolver(null);
+});

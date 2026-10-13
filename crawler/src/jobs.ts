@@ -6,6 +6,7 @@ import { findNearDuplicates } from "./dedupe";
 import { probeItem } from "./probe";
 import { publish } from "./publish";
 import { enqueue } from "./queue";
+import { runSuggestion } from "./suggest";
 
 /** Sync one source for up to max_pages pages from its saved cursor; cursor persisted after every page (resumable). */
 export async function runSync(source_id: string, job_id: number | null = null, override: any = {}) {
@@ -59,6 +60,7 @@ export async function runJob(job: any) {
     case "score": return { scored: await rescoreAll() };
     case "dedupe": return { added: await findNearDuplicates() };
     case "publish": return publish(job.payload ?? {});
+    case "suggestion": return runSuggestion(String(job.payload?.suggestion_id ?? ""));
     default: throw Object.assign(new Error("unknown job kind " + job.kind), { fatal: true });
   }
 }

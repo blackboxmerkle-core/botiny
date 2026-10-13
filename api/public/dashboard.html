@@ -28,7 +28,7 @@ button.sm{background:#21262d;color:var(--fg);border:1px solid var(--line);paddin
 .filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}select,input[type=date]{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:5px 8px;border-radius:6px;width:auto}
 </style></head><body>
 <header><h1>bot-rec-market</h1><span class="pill" id="mode">…</span><span class="pill">read-only · basic auth · TESTNET</span>
-<nav><button data-t="usage" class="on">API usage</button><button data-t="bots">Bots · Try a search</button><button data-t="fin">Financials</button><button data-t="tx">Transactions</button><button data-t="req">Requests</button><button data-t="adv">Advertisers</button><button data-t="cat">Catalogue</button><button data-t="admin">Admin</button><button data-t="crawl">Crawler</button></nav></header>
+<nav><button data-t="usage" class="on">API usage</button><button data-t="bots">Bots · Try a search</button><button data-t="fin">Financials</button><button data-t="tx">Transactions</button><button data-t="req">Requests</button><button data-t="adv">Advertisers</button><button data-t="cat">Catalogue</button><button data-t="admin">Admin</button><button data-t="crawl">Crawler</button><button data-t="sug">Suggestions</button></nav></header>
 <main>
 <section id="t-usage">
  <div class="filters">Bot <select id="u-bot"><option value="">all bots</option></select></div>
@@ -142,6 +142,10 @@ button.sm{background:#21262d;color:var(--fg);border:1px solid var(--line);paddin
  <div class="card" id="detail"><h2>Request detail</h2><p class="mut">Click a request.</p></div></div></section>
 <section id="t-adv" class="hide"><div class="card"><h2>Advertiser spend (per-impression charges)</h2><table id="advs"></table></div></section>
 <section id="t-cat" class="hide"><div class="card"><h2>Catalogue <input id="filter" placeholder="filter…"></h2><table id="cat"></table></div></section>
+<section id="t-sug" class="hide"><h2>Listing suggestions (portal)</h2>
+<p class="muted">Public submissions from <code>POST /v1/suggestions</code>. <b>Accept</b> queues a crawler job (kind <code>suggestion</code>); the worker resolves DNS (public IPs only), probes x402 endpoints, scores and publishes when it clears the bar, else <i>needs_review</i>. <b>Publish</b> force-publishes a needs_review item; <b>Reject</b> needs a reason.</p>
+<div>State: <select id="sg-st" onchange="sug()"><option value="">all</option><option>submitted</option><option>queued</option><option>crawling</option><option>needs_review</option><option>indexed</option><option>rejected</option><option>duplicate</option></select> <span id="sg-cnt" class="muted"></span></div>
+<table><thead><tr><th>submitted</th><th>state</th><th>type</th><th>name / url</th><th>detail</th><th>claim</th><th>actions</th></tr></thead><tbody id="sg-rows"></tbody></table></section>
 <section id="t-crawl" class="hide">
 <div class="subnav" id="cr-nav"><button data-c="src" class="on">Source health</button><button data-c="runs">Run history</button><button data-c="jobs">Jobs</button><button data-c="items">Items</button><button data-c="dedup">Dedup review</button><button data-c="leads">Lead pipeline</button></div>
 <div class="grid" id="cr-kpi"></div>
@@ -358,7 +362,17 @@ const crDd=async(id,dec)=>{const r=await post("api/crawler/dedup/"+id,{decision:
 const crLead=async(id,b)=>{const r=await fetch("api/crawler/leads/"+id,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify(b)}).then(x=>x.json());if(r.error)alert(r.error)};
 $("#cr-go").onclick=()=>{crOff=0;crItems()};$("#cr-q").onkeydown=e=>{if(e.key==="Enter"){crOff=0;crItems()}};$("#cr-next").onclick=()=>{crOff+=100;crItems()};$("#cr-prev").onclick=()=>{crOff=Math.max(0,crOff-100);crItems()};
 ["#cr-run-src","#cr-job-st","#cr-dd-st"].forEach(s=>$(s).onchange=crawl);
-const loaders={usage,bots,fin,tx:txv,req:reqs,adv,cat,admin,crawl};
+async function sug(){const st=$("#sg-st").value;const r=await j("api/suggestions"+(st?"?state="+st:""));
+ $("#sg-cnt").textContent=r.counts.map(c=>`${c.state}: ${c.n}`).join(" · ");
+ $("#sg-rows").innerHTML=r.suggestions.map(x=>`<tr><td>${esc(new Date(x.created_at).toLocaleString())}</td><td><b>${esc(x.state)}</b></td><td>${esc(x.type)}</td>
+  <td>${esc(x.name)}<br><small>${esc(x.url)}</small>${x.description?`<br><small class="muted">${esc(x.description)}</small>`:""}</td>
+  <td><small>${esc(x.reason||x.detail?.needed||x.detail?.note||x.detail?.progress||"")}${x.listing_id?` → ${esc(x.listing_id)}`:""}${x.duplicate_of?` dup of ${esc(x.duplicate_of)}`:""}${x.scores?` q=${esc(x.scores.quality)}`:""}</small></td>
+  <td><small>${esc(x.claim?.status||"")}</small></td>
+  <td>${["submitted","needs_review"].includes(x.state)?`<button onclick="sgAct('${esc(x.suggestion_id)}','accept')">Accept → crawl</button>`:""}
+   ${x.state==="needs_review"&&x.crawl_item_id?`<button onclick="sgAct('${esc(x.suggestion_id)}','publish')">Publish</button>`:""}
+   ${["submitted","queued","crawling","needs_review"].includes(x.state)?`<button onclick="sgAct('${esc(x.suggestion_id)}','reject')">Reject</button>`:""}</td></tr>`).join("")||`<tr><td colspan=7 class="muted">none</td></tr>`;}
+async function sgAct(id,a){let b={};if(a==="reject"){const reason=prompt("Reason for rejection");if(!reason)return;b={reason}}const r=await post(`api/suggestions/${id}/${a}`,b);if(r.error)alert(r.error);sug()}
+const loaders={usage,bots,fin,tx:txv,req:reqs,adv,cat,admin,crawl,sug};
 async function load(){try{tab==="req"?loaders[tab](false):loaders[tab]()}catch(e){console.error(e)}}
 j("/v1/health").then(h=>$("#mode").textContent=`${h.payment_mode} · ${h.network}`);
 load();setInterval(()=>{if(tab==="usage")load()},5000); // only Usage auto-refreshes: other tabs keep paginated/expanded state

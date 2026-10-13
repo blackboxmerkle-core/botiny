@@ -15,6 +15,7 @@ import { payToState } from "./wallets";
 import { activeChains, relayerAddress } from "./relayer";
 import { currentSettings } from "./settings";
 import { MARKET_LOCK, marketSeq, assertNonNegative, advertiserByKey, advertiserSummary, setBid, setIncentive, credit } from "./market";
+import { portalRouter, suggestionsAdminRouter, sessionAdvertiser, sessionOf, listCampaigns, listingStats, createCampaign } from "./portal";
 import { issueClickLinks, pgEngine, scoreClick, settleIncentives, clawbackClick, clearReview, earnings, clickKeys } from "./clicks";
 
 export const botId = (req: express.Request) => { const b = req.get("X-Bot-Id"); return b && /^[A-Za-z0-9._:-]{1,64}$/.test(b) ? b : null; };
@@ -27,6 +28,8 @@ export function createApp() {
   app.use(express.json({ limit: "64kb", verify: (req: any, _res, buf) => { req.rawBody = buf.toString("utf8"); } }));
   app.use(apiLogger());
   app.use("/dashboard", basicAuth(), dashboardRouter()); // HTTP basic auth (admin / DASHBOARD_PASSWORD)
+  app.use("/dashboard", basicAuth(), suggestionsAdminRouter());   // listing-suggestion review (admin)
+  app.use(portalRouter());                                         // human portal: SIWE, suggestions, bot-owner monitoring
   app.get("/v1/health", async (_q, r) => {
     const act = MODE === "mock" ? [] : await activeChains().catch(() => []);
     r.json({ ok: true, payment_mode: MODE, network: MODE === "mock" ? "mock" : act.map(a => a.chain.key).join(",") || "none", settlement: MODE === "mock" ? "mock" : "own-facilitator",
@@ -149,7 +152,8 @@ export function createApp() {
   // ---------- Advertiser API (Authorization: Bearer <advertiser api key>) ----------
   const advAuth: express.RequestHandler = async (req, res, next) => {
     const m = /^Bearer (\S+)$/.exec(req.get("authorization") ?? "");
-    const a = await advertiserByKey(m?.[1]);
+    const a = m && !m[1].startsWith("bts_") ? await advertiserByKey(m[1]) : null;
+    if (!a) { const sa = await sessionAdvertiser(req); if (sa) { res.locals.adv = sa; res.locals.adv_via = "siwe"; return next(); } }
     if (!a) return res.status(401).json({ error: "advertiser API key required (Authorization: Bearer ...)" });
     res.locals.adv = a.advertiser_id; next();
   };
@@ -161,6 +165,13 @@ export function createApp() {
     try { const { incentiveReport, reportCsv } = await import("./pacing"); const r = await incentiveReport(pool, res.locals.adv);
       if (req.query.format === "csv") { res.type("text/csv").set("Content-Disposition", `attachment; filename="incentives-${res.locals.adv.replace(/\W/g, "_")}.csv"`).send(reportCsv(r)); } else res.json(r);
     } catch (e) { fail(res, e); }
+  });
+  app.get("/v1/advertisers/me/campaigns", advAuth, async (req, res) => { try { res.json(await listCampaigns(res.locals.adv, req.query.all === "1")); } catch (e) { fail(res, e); } });
+  app.get("/v1/advertisers/me/campaigns/:lid", advAuth, async (req, res) => { try { res.json(await listingStats(res.locals.adv, String(req.params.lid), String(req.query.range ?? "30d"))); } catch (e) { fail(res, e); } });
+  app.get("/v1/advertisers/me/listings/:lid/stats", advAuth, async (req, res) => { try { res.json(await listingStats(res.locals.adv, String(req.params.lid), String(req.query.range ?? "30d"))); } catch (e) { fail(res, e); } });
+  app.post("/v1/advertisers/me/campaigns", advAuth, async (req, res) => {
+    try { const r = await createCampaign(res.locals.adv, req.body); res.status(r.status).json(r.body); }
+    catch (e: any) { if (e?.code === "insufficient_balance") { res.locals.error = e.message; return res.status(409).json({ error: e.message, code: e.code, summary: e.summary, topup: "/v1/advertisers/me/topup" }); } fail(res, e); }
   });
   app.put("/v1/advertisers/me/listings/:lid/incentive", advAuth, async (req, res) => {
     try { res.json(await setIncentive(String(req.params.lid), { show_atomic: req.body?.show_atomic, click_atomic: req.body?.click_atomic, budget_atomic: req.body?.budget_atomic, expires_at: req.body?.expires_at }, "advertiser:" + res.locals.adv, res.locals.adv)); } catch (e) { fail(res, e); }
@@ -197,6 +208,11 @@ export function createApp() {
   // Earnings: signature REQUIRED (new endpoint, no legacy header mode).
   app.get("/v1/bots/me/earnings", async (req: any, res) => {
     try {
+      if (!req.get("X-Bot-Signature")) {   // portal: SIWE session => earnings for the signed-in wallet + linked wallets
+        const s = await sessionOf(req);
+        if (s) { const ws = [s.address, ...(await pool.query("SELECT wallet FROM bot_owner_wallets WHERE owner_address=$1", [s.address])).rows.map((r: any) => r.wallet)];
+          return res.json({ address: s.address, wallets: await Promise.all(ws.map(w => earnings(w))) }); }
+      }
       const engine = await pgEngine(pool);
       const { verifySignedRequest } = await import(require("node:url").pathToFileURL(require("node:path").join(__dirname, "..", "..", "click-server", "src", "binding.js")).href);
       const a = await verifySignedRequest({ method: "GET", path: "/v1/bots/me/earnings", headers: req.headers, body: "", cfg: { ...engine.cfg, allowUnsignedBotRequests: false }, verifyMessage: engine.verifyMessage, store: engine.store });

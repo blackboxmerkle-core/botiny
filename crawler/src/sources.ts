@@ -13,12 +13,14 @@ export const SOURCES: SourceDef[] = [
     licence_class: "public-metadata", config: { page_size: 100, max_pages: 15, interval_min: 720 }, notes: "Strapi API; agents with offerings and job metrics." },
   { source_id: "npm", name: "npm search (keywords mcp, x402, a2a)", base_url: "https://registry.npmjs.org/-/v1/search",
     licence_class: "package-registry", config: { page_size: 250, max_pages: 4, keywords: ["mcp", "x402", "a2a"], interval_min: 1440 }, notes: "Package metadata + download counts." },
+  { source_id: "suggestions", name: "Portal suggestions (user-submitted)", base_url: "https://botiny/v1/suggestions", licence_class: "user-submitted", config: {},
+    notes: "Human-submitted via POST /v1/suggestions; crawled only after admin accept (job kind 'suggestion'). No scheduled sync." },
   { source_id: "glama", name: "Glama (skipped)", base_url: "https://glama.ai", licence_class: "excluded", config: {}, notes: "Skipped: ToS does not permit automated collection." },
 ];
 export async function ensureSources() {
   for (const s of SOURCES) {
     await q(`INSERT INTO crawl_sources(source_id,name,base_url,licence_class,config,notes,enabled,health)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (source_id) DO NOTHING`,
-      [s.source_id, s.name, s.base_url, s.licence_class, s.config, s.notes, s.licence_class !== "excluded", s.licence_class === "excluded" ? "excluded" : "unknown"]);
+      [s.source_id, s.name, s.base_url, s.licence_class, s.config, s.notes, !["excluded", "user-submitted"].includes(s.licence_class), s.licence_class === "excluded" ? "excluded" : "unknown"]);
   }
 }

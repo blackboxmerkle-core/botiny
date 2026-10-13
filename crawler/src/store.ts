@@ -1,7 +1,7 @@
 import type { PoolClient } from "pg";
 import { pool } from "./db";
 import { NormItem, sha, TYPE_RANK } from "./normalize";
-const TEXT_OK = new Set(["public-metadata", "catalogue-facts", "package-registry"]);   // licences allowing a short summary
+const TEXT_OK = new Set(["public-metadata", "catalogue-facts", "package-registry", "user-submitted"]);   // licences allowing a short summary
 
 /** Upsert one normalised record. Hard-key dedupe: any shared key => same item; if keys span several items they are merged. */
 export async function upsertItem(n: NormItem): Promise<{ item_id: string; created: boolean; changed: boolean }> {
