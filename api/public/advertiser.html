@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Botiny · Advertiser click feed</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+ body{font:14px/1.45 system-ui,sans-serif;margin:0;background:#f6f7f9;color:#1c2330}
+ header{background:#16213a;color:#fff;padding:12px 20px;display:flex;gap:16px;align-items:center}
+ header b{font-size:17px} header .net{background:#f4b400;color:#000;border-radius:4px;padding:2px 8px;font-size:12px}
+ main{padding:16px 20px;max-width:1300px} .card{background:#fff;border:1px solid #dde1e8;border-radius:8px;padding:14px;margin-bottom:14px}
+ h2{font-size:15px;margin:0 0 10px} table{border-collapse:collapse;width:100%;font-size:12.5px} th,td{border-bottom:1px solid #eceef2;padding:5px 6px;text-align:left;white-space:nowrap}
+ th{background:#fafbfc;position:sticky;top:0} .mono{font-family:ui-monospace,monospace;font-size:11.5px} .s1{color:#0a7d32}.s2{color:#888}.s3{color:#b26b00}.s4{color:#b00020}.s5{color:#1a56c9;font-weight:600}
+ .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px} .bars{display:flex;align-items:flex-end;gap:2px;height:120px;border-bottom:1px solid #ccd}
+ .bars div{flex:1;background:#4a6fd8;min-height:1px;position:relative} .bars div span{position:absolute;bottom:-17px;left:0;right:0;text-align:center;font-size:9.5px;color:#667}
+ .kpi{display:flex;gap:18px;flex-wrap:wrap}.kpi div{background:#f2f5fb;border-radius:6px;padding:8px 12px}.kpi b{display:block;font-size:20px}
+ button{cursor:pointer;border:1px solid #9aa6bd;background:#fff;border-radius:5px;padding:3px 9px} button.pri{background:#2848b8;color:#fff;border-color:#2848b8}
+ .ok{color:#0a7d32;font-weight:600}.bad{color:#b00020;font-weight:600} input{padding:5px;border:1px solid #bcc4d3;border-radius:5px}
+ .scroll{max-height:460px;overflow:auto} code{background:#f0f2f6;padding:1px 4px;border-radius:3px} small{color:#667}
+</style></head><body>
+<header><b>Botiny</b><span>Advertiser · click attestation feed</span><span class="net" id="net">SKALE Europa TESTNET</span><span style="flex:1"></span>
+ <input id="key" type="password" placeholder="advertiser API key (adv_…)" size="34"><button class="pri" onclick="load()">Load</button></header>
+<main>
+<div class="card" id="intro"><h2>What this is</h2>
+ Every click on your Botiny links is attested on a public chain (SKALE Europa testnet, gasless) by the Botiny attester, so you can inspect it
+ without trusting our API: each click emits a <code>Click</code> event, and later status changes (held / vested / clawed back) emit <code>StatusUpdate</code> events.
+ Nothing personal is published: the visitor is a daily-rotated salted hash, combined with the click id (never an IP).
+ <span id="msg"></span></div>
+<div class="card" id="salt" hidden><h2>Find your own events: the campaign salt</h2>
+ <p>Each event carries a <code>campaignHash</code> (indexed topic). It is
+ <code>keccak256(utf8("botiny.campaign.v1|" + salt + "|" + advertiser_id + "|" + listing_id))</code>. Your <b>salt</b> is private to you, so competitors
+ cannot tell which events are yours. Compute the hash yourself (below it is computed in your browser) and filter
+ <code>eth_getLogs</code> on the contract by topic 3 (<code>Click</code>) or topic 2 (<code>StatusUpdate</code>).</p>
+ <div>Advertiser: <b id="adv"></b> · salt: <code id="saltv" class="mono"></code> · contract: <a id="contract" class="mono" target="_blank"></a> · chain id <span id="cid"></span> · RPC <code id="rpc" class="mono"></code></div>
+ <table id="camps" style="margin-top:8px"></table>
+ <div style="margin-top:8px">From block <input id="fromBlock" value="0" size="10"> <button onclick="scanChain()">Scan chain for my Click events</button> <span id="scan"></span></div>
+</div>
+<div class="grid" id="charts" hidden>
+ <div class="card"><h2>Uniqueness</h2><div class="kpi" id="kpi"></div><p><small>Distinct <code>clickHash</code> = unique click records. The contract refuses a second <code>Click</code> for the same clickHash; duplicates by the same visitor show up as <i>filtered</i> with a reason.</small></p></div>
+ <div class="card"><h2>Time of day (your local time)</h2><div class="bars" id="hours"></div><br><label><input type="checkbox" id="paidOnly" onchange="charts()"> paid/held/vested only</label></div>
+ <div class="card"><h2>Day of week</h2><div class="bars" id="dows"></div><br><h2 style="margin-top:12px">Per day (last 30)</h2><div class="bars" id="days" style="height:70px"></div></div>
+</div>
+<div class="card" id="feed" hidden><h2>Click feed <button onclick="csv()">Export CSV</button> <button onclick="verifyAll()">Verify visible (on chain)</button></h2>
+ <div class="scroll"><table><thead><tr><th>Time (local)</th><th>Listing</th><th>Status</th><th>Reason</th><th>clickHash</th><th>Click tx</th><th>Latest tx</th><th>Verify</th></tr></thead><tbody id="rows"></tbody></table></div></div>
+</main>
+<script>
+// ---- tiny keccak256 (BigInt, for a handful of hashes in the browser) ----
+const RC=[1n,0x8082n,0x800000000000808an,0x8000000080008000n,0x808bn,0x80000001n,0x8000000080008081n,0x8000000000008009n,0x8an,0x88n,0x80008009n,0x8000000an,0x8000808bn,0x800000000000008bn,0x8000000000008089n,0x8000000000008003n,0x8000000000008002n,0x8000000000000080n,0x800an,0x800000008000000an,0x8000000080008081n,0x8000000000008080n,0x80000001n,0x8000000080008008n];
+const ROT=[[0,36,3,41,18],[1,44,10,45,2],[62,6,43,15,61],[28,55,25,21,56],[27,20,39,8,14]];const M=(1n<<64n)-1n;
+const rol=(x,n)=>n?((x<<BigInt(n))|(x>>BigInt(64-n)))&M:x;
+function keccakF(s){for(let r=0;r<24;r++){const C=[0,1,2,3,4].map(x=>s[x]^s[x+5]^s[x+10]^s[x+15]^s[x+20]);for(let x=0;x<5;x++){const D=C[(x+4)%5]^rol(C[(x+1)%5],1);for(let y=0;y<5;y++)s[x+5*y]^=D;}
+ const B=new Array(25);for(let x=0;x<5;x++)for(let y=0;y<5;y++)B[y+5*((2*x+3*y)%5)]=rol(s[x+5*y],ROT[x][y]);
+ for(let x=0;x<5;x++)for(let y=0;y<5;y++)s[x+5*y]=B[x+5*y]^((~B[(x+1)%5+5*y]&M)&B[(x+2)%5+5*y]);s[0]^=RC[r];}}
+function keccak256(bytes){const rate=136,p=[...bytes,1];while(p.length%rate)p.push(0);p[p.length-1]|=0x80;const s=new Array(25).fill(0n);
+ for(let o=0;o<p.length;o+=rate){for(let i=0;i<rate/8;i++){let w=0n;for(let b=7;b>=0;b--)w=(w<<8n)|BigInt(p[o+i*8+b]);s[i]^=w;}keccakF(s);}
+ let h='0x';for(let i=0;i<4;i++)for(let b=0;b<8;b++)h+=Number((s[i]>>BigInt(8*b))&0xffn).toString(16).padStart(2,'0');return h;}
+const k256=t=>keccak256([...new TextEncoder().encode(t)]);
+// ---- app ----
+let F=null;const $=id=>document.getElementById(id);const esc=s=>String(s??'').replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';');
+$('key').value=sessionStorage.getItem('advkey')||'';
+async function api(p){const k=$('key').value.trim();const r=await fetch(p,{credentials:'same-origin',headers:k?{authorization:'Bearer '+k}:{}});if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.message||j.error||r.status)};return r;}
+async function load(){try{sessionStorage.setItem('advkey',$('key').value.trim());F=await (await api('/v1/advertisers/me/attestations')).json();render();}catch(e){$('msg').innerHTML=' <span class="bad">'+esc(e.message)+'</span>';}}
+function render(){['salt','charts','feed'].forEach(i=>$(i).hidden=false);
+ if(k256('Click(bytes32,bytes32,bytes32,uint8,uint16,uint64)')!==F.topics.Click){$('msg').innerHTML=' <span class="bad">keccak self-test failed</span>';}
+ $('adv').textContent=F.advertiser_id;$('fromBlock').value=F.from_block||'0';$('saltv').textContent=F.salt;$('cid').textContent=F.chain.id;$('rpc').textContent=F.chain.public_rpc;
+ $('contract').textContent=F.contract||'(not deployed / attestation off)';if(F.contract)$('contract').href=F.chain.explorer+'/address/'+F.contract;
+ $('msg').innerHTML=F.attestation_enabled?' <span class="ok">Attestation is live.</span>':' <span class="bad">On-chain attestation is not enabled on this server yet; rows show as pending.</span>';
+ $('camps').innerHTML='<tr><th>Listing</th><th>campaignHash (computed in your browser)</th><th>matches server</th></tr>'+F.listings.map(l=>{const h=k256('botiny.campaign.v1|'+F.salt+'|'+F.advertiser_id+'|'+l.listing_id);
+  return `<tr><td>${esc(l.name)} <small class=mono>${esc(l.listing_id)}</small></td><td class=mono>${h}</td><td>${h===l.campaign_hash?'<span class=ok>✓</span>':'<span class=bad>✗</span>'}</td></tr>`}).join('');
+ const u=F.uniqueness;$('kpi').innerHTML=`<div><b>${u.events}</b>click records</div><div><b>${u.distinct_click_hash}</b>distinct clickHash</div><div><b>${u.distinct_link_hash}</b>distinct links</div>`+Object.entries(u.by_status).map(([k,v])=>`<div><b>${v}</b>${k}</div>`).join('');
+ charts();
+ $('rows').innerHTML=F.clicks.map((r,i)=>{const t=new Date(r.clicked_at);const tx=(h,u)=>h?`<a class=mono target=_blank href="${esc(u)}">${h.slice(0,10)}…</a>`:`<small>${esc(r.click_state)}</small>`;
+  return `<tr><td>${t.toLocaleString()}</td><td class=mono>${esc(r.listing_id)}</td><td class="s${r.status}">${esc(r.status_name)}</td><td>${esc(r.reason_name)}</td><td class=mono title="${r.click_hash}">${r.click_hash.slice(0,12)}…</td>
+  <td>${tx(r.click_tx,r.click_tx_url)}</td><td>${r.kind==='status'?tx(r.tx_hash,r.tx_url):'<small>—</small>'}</td><td>${r.click_tx?`<button onclick="verify(${i})">Verify</button> <span id=v${i}></span>`:'<small>not yet on chain</small>'}</td></tr>`}).join('');}
+function bars(el,vals,labels){const mx=Math.max(1,...vals);$(el).innerHTML=vals.map((v,i)=>`<div title="${labels[i]}: ${v}" style="height:${100*v/mx}%"><span>${labels[i]}</span></div>`).join('');}
+function charts(){const rows=F.clicks.filter(r=>!$('paidOnly').checked||[1,3,5].includes(r.status));
+ const h=new Array(24).fill(0),d=new Array(7).fill(0);rows.forEach(r=>{const t=new Date(r.clicked_at);h[t.getHours()]++;d[t.getDay()]++;});
+ bars('hours',h,h.map((_,i)=>i%3?'':String(i)));bars('dows',d,['Su','Mo','Tu','We','Th','Fr','Sa']);
+ const days=[];for(let i=29;i>=0;i--){const t=new Date();t.setHours(0,0,0,0);t.setDate(t.getDate()-i);days.push(t);}
+ bars('days',days.map(t=>rows.filter(r=>{const x=new Date(r.clicked_at);return x>=t&&x<new Date(t.getTime()+864e5)}).length),days.map((t,i)=>i%5?'':(t.getMonth()+1)+'/'+t.getDate()));}
+async function rpc(method,params){const r=await fetch(F.chain.public_rpc,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});const j=await r.json();if(j.error)throw new Error(j.error.message);return j.result;}
+const word=(data,i)=>BigInt('0x'+data.slice(2+64*i,66+64*i));
+// Reads the receipt from the PUBLIC RPC in your browser and checks the logged event matches this row.
+async function checkLog(tx,logIndex,want){const rc=await rpc('eth_getTransactionReceipt',[tx]);if(!rc)return 'tx not found';if(rc.status!=='0x1')return 'tx failed';
+ const l=rc.logs.find(l=>parseInt(l.logIndex,16)===Number(logIndex));if(!l)return 'log '+logIndex+' missing';
+ if(l.address.toLowerCase()!==F.contract)return 'wrong contract '+l.address;
+ const T=l.topics.map(x=>x.toLowerCase());
+ if(want.kind==='click'){if(T[0]!==F.topics.Click)return 'not a Click event';if(T[1]!==want.link_hash||T[2]!==want.click_hash||T[3]!==want.campaign_hash)return 'hash mismatch';}
+ else{if(T[0]!==F.topics.StatusUpdate)return 'not a StatusUpdate';if(T[1]!==want.click_hash||T[2]!==want.campaign_hash)return 'hash mismatch';}
+ if(Number(word(l.data,0))!==want.status||Number(word(l.data,1))!==want.reason)return 'status/reason mismatch';
+ if(!F.listings.some(x=>x.campaign_hash===want.campaign_hash))return 'campaign not yours';return '';}
+async function verify(i){const r=F.clicks[i],out=$('v'+i);out.textContent='…';try{
+ let e=await checkLog(r.click_tx,r.click_log_index,{kind:'click',link_hash:r.link_hash,click_hash:r.click_hash,campaign_hash:r.campaign_hash,status:r.click_status,reason:r.click_reason});
+ if(!e&&r.kind==='status'&&r.tx_hash&&r.state==='confirmed')e=await checkLog(r.tx_hash,r.log_index,{kind:'status',click_hash:r.click_hash,campaign_hash:r.campaign_hash,status:r.status,reason:r.reason});
+ out.innerHTML=e?'<span class=bad>✗ '+esc(e)+'</span>':'<span class=ok>✓ on chain</span>';}catch(x){out.innerHTML='<span class=bad>RPC: '+esc(x.message)+'</span>';}}
+async function verifyAll(){for(let i=0;i<Math.min(F.clicks.length,50);i++)if(F.clicks[i].click_tx)await verify(i);}
+async function scanChain(){try{const camps=F.listings.map(l=>l.campaign_hash);const logs=await rpc('eth_getLogs',[{address:F.contract,fromBlock:'0x'+BigInt($('fromBlock').value||0).toString(16),toBlock:'latest',topics:[F.topics.Click,null,null,camps]}]);
+ const mine=new Set(F.clicks.map(r=>r.click_hash));$('scan').innerHTML=`<b>${logs.length}</b> Click events on chain for your campaigns; ${logs.filter(l=>mine.has(l.topics[2].toLowerCase())).length} match this feed.`;}catch(e){$('scan').innerHTML='<span class=bad>'+esc(e.message)+'</span>';}}
+async function csv(){const b=await (await api('/v1/advertisers/me/attestations?format=csv')).blob();const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='botiny-clicks.csv';a.click();}
+load(); // API key, or the portal's signed-in advertiser session cookie
+</script></body></html>

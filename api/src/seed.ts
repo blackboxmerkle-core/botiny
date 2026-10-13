@@ -13,11 +13,12 @@ export async function seed() {
 if (require.main === module) seed().then(n => { console.log(`seeded ${n} listings`); return pool.end(); });
 /** Test-only: wipe and reseed, refusing unless the connected database name ends in _test. */
 export async function resetTestDb() {
-  await migrate();
-  const { migrateCrawlerSchema } = await import("./db"); await migrateCrawlerSchema();
+  // Check the database name BEFORE anything touches the schema (migrations used to run first).
   const db = (await pool.query("SELECT current_database() AS d")).rows[0].d as string;
   if (!db.endsWith("_test")) throw new Error(`refusing to reset non-test database ${db}`);
-  await pool.query("TRUNCATE bot_appeals, listing_suggestions, bot_owner_wallets, advertiser_wallets, portal_sessions, siwe_nonces, incentive_pool_ledger, escrow_refunds, used_signatures, click_strikes, cluster_wallets, cluster_keys, bot_api_keys, incentive_ledger, proofs, clicks, publishers, short_links, harvest_tokens, incentive_offers, ban_events, bans, admin_audit, wallet_settings, payment_nonces, tos_versions, crawl_leads, crawl_probes, crawl_dedup_queue, crawl_item_sources, crawl_item_keys, crawl_items, crawl_jobs, crawl_runs, crawl_sources, crawl_hosts, api_log, balance_ledger, listing_bid_events, advertisers, impressions, requests, listings, settings_versions RESTART IDENTITY CASCADE");
+  await migrate();
+  const { migrateCrawlerSchema } = await import("./db"); await migrateCrawlerSchema();
+  await pool.query("TRUNCATE click_attestation_events, click_attestations, attest_salts, bot_appeals, listing_suggestions, bot_owner_wallets, advertiser_wallets, portal_sessions, siwe_nonces, incentive_pool_ledger, escrow_refunds, used_signatures, click_strikes, cluster_wallets, cluster_keys, bot_api_keys, incentive_ledger, proofs, clicks, publishers, short_links, harvest_tokens, incentive_offers, ban_events, bans, admin_audit, wallet_settings, payment_nonces, tos_versions, crawl_leads, crawl_probes, crawl_dedup_queue, crawl_item_sources, crawl_item_keys, crawl_items, crawl_jobs, crawl_runs, crawl_sources, crawl_hosts, api_log, balance_ledger, listing_bid_events, advertisers, impressions, requests, listings, settings_versions RESTART IDENTITY CASCADE");
   const { ensureSettings } = await import("./settings"); await ensureSettings();
   const { ensureTos } = await import("./tos"); await ensureTos();
   const { ensureWallet, _resetWalletCache } = await import("./wallets"); _resetWalletCache(); await ensureWallet();
