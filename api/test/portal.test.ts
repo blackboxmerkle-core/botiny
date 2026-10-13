@@ -137,6 +137,11 @@ test("bot-owner monitoring is scoped to the signed-in wallet (+ linked wallets);
   const ln2 = await siwe(other, { resources: [`botiny:link:${stranger.address.toLowerCase()}`] });
   assert.equal((await post("/v1/bots/me/wallets", { siwe_message: ln2.message, signature: ln2.signature }, s3)).error, "wallet_linked_elsewhere");
   assert.deepEqual((await get("/v1/bots/me", s3)).bots, []);
+  const ns = await get("/v1/bots/me/_none/stats?range=7d", s3); assert.equal(ns.status, 200); assert.equal(ns.queries, 0); assert.deepEqual(ns.series, []); assert.equal(ns.clicks.links, 0); assert.equal(ns.bot_id, null);
+  const nr = await get("/v1/bots/me/_none/requests", s3); assert.equal(nr.status, 200); assert.deepEqual(nr.requests, []); assert.equal(nr.next_cursor, null);
+  assert.equal((await get("/v1/bots/me/nobot/stats", s3)).status, 404, "named bots still 404 when not yours");
+  const meJ = JSON.stringify(await get("/v1/bots/me", tok)) + JSON.stringify(await get("/v1/bots/me/portal-bot/stats", tok)) + JSON.stringify(await get("/v1/bots/me/portal-bot/requests", tok));
+  assert.ok(!/taster/.test(meJ), "no free-taster fields");
   const e = await get("/v1/bots/me/earnings", tok); assert.equal(e.wallets.length, 2);
   assert.equal((await get("/v1/bots/me/earnings")).status, 401, "unsigned, no session: still 401");
   // appeal

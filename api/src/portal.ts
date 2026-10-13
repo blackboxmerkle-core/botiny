@@ -280,6 +280,7 @@ async function earningsFor(wallets: string[]) {
   return { totals: tot, wallets: per, states: { pending: "awaiting click-server verification (review hold)", vesting: "held 14 days", vested: "released", clawed_back: "returned to the advertiser's pool" } };
 }
 async function assertOwnsBot(bot: string, wallets: string[]) {
+  if (bot === NONE) return;   // unnamed-bot group: always 200 (zero stats / empty list when the wallet has none)
   const ok = (await q(`SELECT 1 FROM requests r WHERE lower(r.payer) = ANY($1) AND ${botFilter(bot, 2)} LIMIT 1`, bot === NONE ? [wallets] : [wallets, bot])).length;
   if (!ok) throw err(404, "no such bot for the signed-in wallet(s)");
 }
@@ -371,19 +372,18 @@ export function portalRouter() {
     const s: Session = res.locals.session; const W = await ownedWallets(s.address);
     const bots = await q(`SELECT r.bot_id, array_agg(DISTINCT lower(r.payer)) paying_wallets, array_agg(DISTINCT r.payment_network) FILTER (WHERE r.payment_network IS NOT NULL) chains,
         count(*) FILTER (WHERE r.received_at > now() - interval '30 days')::int queries_30d,
-        count(*) FILTER (WHERE r.received_at > now() - interval '30 days' AND COALESCE(r.payment_amount_atomic,0)=0)::int free_taster_30d,
         COALESCE(sum(r.payment_amount_atomic) FILTER (WHERE r.received_at > now() - interval '30 days' AND r.payment_status='settled'),0)::text spend_30d_atomic,
         count(*)::int queries_total, max(r.received_at) last_seen
       FROM requests r WHERE lower(r.payer) = ANY($1) GROUP BY 1 ORDER BY max(r.received_at) DESC`, [W]);
     const earned = new Map((await q(`SELECT r.bot_id, COALESCE(sum(i.delta_atomic) FILTER (WHERE i.kind IN ('accrue_held','review_hold')),0)::text e
       FROM incentive_ledger i JOIN harvest_tokens hv USING (token) JOIN requests r ON r.request_id=hv.request_id WHERE lower(r.payer)=ANY($1) GROUP BY 1`, [W])).map(x => [x.bot_id, Number(x.e)]));
-    const daily = await q(`SELECT to_char(date_trunc('day', received_at),'YYYY-MM-DD') AS day, count(*) FILTER (WHERE COALESCE(payment_amount_atomic,0)>0)::int paid, count(*) FILTER (WHERE COALESCE(payment_amount_atomic,0)=0)::int taster
+    const daily = await q(`SELECT to_char(date_trunc('day', received_at),'YYYY-MM-DD') AS day, count(*)::int queries
       FROM requests WHERE lower(payer)=ANY($1) AND received_at > now() - interval '30 days' GROUP BY 1 ORDER BY 1`, [W]);
     const out: any[] = [];
     for (const b of bots) out.push({ bot_id: b.bot_id, path_id: b.bot_id ?? NONE, ...b, spend_30d_atomic: Number(b.spend_30d_atomic), incentives_earned_atomic: earned.get(b.bot_id) ?? 0, ban: await banState(b.bot_id, b.paying_wallets) });
     const sum = (k: string) => out.reduce((a, x: any) => a + Number(x[k] ?? 0), 0);
     res.json({ address: s.address, wallets: W, asset: "USDC (testnet, 6 decimals)", bots: out,
-      totals: { queries_30d: sum("queries_30d"), free_taster_30d: sum("free_taster_30d"), spend_30d_atomic: sum("spend_30d_atomic"), incentives_earned_atomic: sum("incentives_earned_atomic") }, daily });
+      totals: { queries_30d: sum("queries_30d"), spend_30d_atomic: sum("spend_30d_atomic"), incentives_earned_atomic: sum("incentives_earned_atomic") }, daily });
   }));
   r.post("/v1/bots/me/wallets", requireSession(), h(async (req, res) => {
     const s: Session = res.locals.session;
@@ -403,7 +403,7 @@ export function portalRouter() {
     const base = `FROM requests r WHERE lower(r.payer)=ANY($1) AND ${bf} AND r.received_at > now() - ($2::bigint * interval '1 millisecond')`;
     const fmt = R.bucket === "hour" ? "YYYY-MM-DD\"T\"HH24:00Z" : "YYYY-MM-DD";
     const series = await q(`SELECT to_char(date_trunc('${R.bucket}', r.received_at AT TIME ZONE 'UTC'),'${fmt}') t, count(*)::int queries,
-        count(*) FILTER (WHERE COALESCE(r.payment_amount_atomic,0)=0)::int taster, COALESCE(sum(r.payment_amount_atomic) FILTER (WHERE r.payment_status='settled'),0)::text spend_atomic ${base} GROUP BY 1 ORDER BY 1`, p);
+        COALESCE(sum(r.payment_amount_atomic) FILTER (WHERE r.payment_status='settled'),0)::text spend_atomic ${base} GROUP BY 1 ORDER BY 1`, p);
     const chains = await q(`SELECT r.payment_network network, r.payment_chain_id chain_id, count(*)::int queries, COALESCE(sum(r.payment_amount_atomic) FILTER (WHERE r.payment_status='settled'),0)::text spend_atomic ${base} GROUP BY 1,2 ORDER BY 3 DESC`, p);
     const mix = (await q(`SELECT count(*) FILTER (WHERE NOT i.sponsored AND COALESCE(hv.show_atomic+hv.click_atomic,0)=0)::int organic, count(*) FILTER (WHERE i.sponsored AND COALESCE(hv.show_atomic+hv.click_atomic,0)=0)::int promoted,
         count(*) FILTER (WHERE COALESCE(hv.show_atomic+hv.click_atomic,0)>0)::int incentive
@@ -441,14 +441,14 @@ export function portalRouter() {
         (SELECT count(*) FILTER (WHERE COALESCE(hv.show_atomic+hv.click_atomic,0)>0)::int FROM impressions i LEFT JOIN harvest_tokens hv ON hv.request_id=i.request_id AND hv.rank=i.rank WHERE i.request_id=r.request_id) incentive
       FROM requests r WHERE ${w} ORDER BY r.received_at DESC, r.request_id DESC LIMIT ${limit}`, p);
     const items = rows.map(x => ({ request_id: x.request_id, received_at: x.received_at, query: x.query, k: x.k, results: { organic: x.organic, promoted: x.promoted, incentive: x.incentive },
-      response_hash: x.response_hash, payment: Number(x.amount_atomic ?? 0) === 0 ? { free_taster: true } : { mode: x.payment_mode, network: x.payment_network, chain_id: x.payment_chain_id, amount_atomic: Number(x.amount_atomic), status: x.payment_status, tx: x.settle_tx },
+      response_hash: x.response_hash, payment: { mode: x.payment_mode, network: x.payment_network, chain_id: x.payment_chain_id, amount_atomic: Number(x.amount_atomic ?? 0), status: x.payment_status, tx: x.settle_tx },
       tos_version: x.tos_version, detail_url: `/v1/requests/${x.request_id}`, replay_url: `/v1/requests/${x.request_id}/replay` }));
     const next = rows.length === limit ? encCursor(rows[rows.length - 1].received_at, rows[rows.length - 1].request_id) : null;
     if (csv) {
       const esc = (v: any) => v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
       const lines = ["request_id,received_at,query,k,organic,promoted,incentive,response_hash,network,amount_atomic,tx,tos_version",
         ...items.map(i => [i.request_id, new Date(i.received_at).toISOString(), i.query, i.k, i.results.organic, i.results.promoted, i.results.incentive, i.response_hash,
-          (i.payment as any).network ?? "free_taster", (i.payment as any).amount_atomic ?? 0, (i.payment as any).tx, i.tos_version].map(esc).join(","))];
+          (i.payment as any).network, (i.payment as any).amount_atomic ?? 0, (i.payment as any).tx, i.tos_version].map(esc).join(","))];
       if (next) res.set("X-Next-Cursor", next);
       return res.type("text/csv").set("Content-Disposition", `attachment; filename="requests-${bot.replace(/\W/g, "_")}.csv"`).send(lines.join("\n") + "\n");
     }
