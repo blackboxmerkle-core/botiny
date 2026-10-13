@@ -36,8 +36,8 @@ export async function currentTos(kind: TosKind) {
 export async function tosVersion(kind: TosKind, version: number) { return (await q("SELECT * FROM tos_versions WHERE kind=$1 AND version=$2", [kind, version]))[0]; }
 export async function tosHistory(kind: TosKind) { return q("SELECT kind, version, sha256, note, created_at, length(body) AS chars FROM tos_versions WHERE kind=$1 ORDER BY version DESC", [kind]); }
 export async function saveTos(kind: TosKind, body: string, note: string | null) {
-  if (typeof body !== "string" || body.trim().length < 50 || body.length > 50_000) throw Object.assign(new Error("body must be 50..50000 chars"), { status: 400 });
-  if (!/DRAFT/.test(body)) throw Object.assign(new Error("testnet ToS must stay clearly marked DRAFT"), { status: 400 });
+  if (typeof body !== "string" || body.trim().length < 50 || body.length > 50_000) throw Object.assign(new Error("body must be 50..50000 chars"), { status: 400, code: "validation" });
+  if (!/DRAFT/.test(body)) throw Object.assign(new Error("testnet ToS must stay clearly marked DRAFT"), { status: 400, code: "validation" });
   const r = await q(`INSERT INTO tos_versions(kind,version,body,sha256,note)
       SELECT $1, COALESCE(MAX(version),0)+1, $2, $3, $4 FROM tos_versions WHERE kind=$1 RETURNING kind, version, sha256, created_at`, [kind, body, tosHashOf(body), note]);
   return r[0];

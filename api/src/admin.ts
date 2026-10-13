@@ -6,7 +6,7 @@ import { MODE } from "./payment";
 import { audit, actorOf, payToState, setPayTo, rotateRelayer, GRACE_SEC } from "./wallets";
 import { addBan, revokeBan } from "./bans";
 const q = async (sql: string, p: any[] = []) => (await pool.query(sql, p)).rows;
-const fail = (res: express.Response, e: any) => res.status(e?.status ?? (e?.code === "23505" ? 409 : 500)).json({ error: String(e?.message ?? e) });
+const fail = (res: express.Response, e: any) => res.status(e?.status ?? (e?.code === "23505" ? 409 : 500)).json({ error: String(e?.message ?? e), ...(typeof e?.code === "string" && e.code !== "23505" ? { code: e.code } : {}) });
 export const SIM_BOTS = ["research-bot", "dev-bot"];
 const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 
@@ -22,7 +22,9 @@ export function adminRouter() {
           COALESCE(SUM(b.delta_atomic) FILTER (WHERE b.kind='topup_x402'),0)::text topups_onchain,
           COALESCE(SUM(b.delta_atomic) FILTER (WHERE b.kind='admin_credit'),0)::text admin_credits,
           COALESCE(-SUM(b.delta_atomic) FILTER (WHERE b.kind='impression_debit'),0)::text spend,
-          COUNT(b.*) FILTER (WHERE b.kind='impression_debit')::int sponsored_impressions
+          COUNT(b.*) FILTER (WHERE b.kind='impression_debit')::int sponsored_impressions,
+          COALESCE(SUM(b.delta_atomic),0)::float8 balance_atomic,
+          (SELECT w.address FROM advertiser_wallets w WHERE w.advertiser_id=a.advertiser_id) linked_wallet
         FROM advertisers a LEFT JOIN balance_ledger b USING (advertiser_id) GROUP BY 1,2,3 ORDER BY 1`),
       listings: await q(`SELECT l.listing_id, l.provider_id, l.name, l.kind,
           COALESCE(e.bid_atomic,0)::int bid_atomic, COALESCE(e.paused,false) paused, (a.advertiser_id IS NOT NULL) has_account
@@ -45,6 +47,9 @@ export function adminRouter() {
       const c = await credit(req.params.id, Number(req.body?.amount_atomic), "admin_credit", { note: req.body?.note ?? "manual test credit (no funds moved)" });
       await audit(actorOf(req.headers.authorization), "advertiser_credit", { advertiser_id: req.params.id, amount_atomic: Number(req.body?.amount_atomic) }); res.json(c);
     } catch (e) { fail(res, e); }
+  });
+  r.post("/api/admin/advertisers/:id/unlink", async (req, res) => {
+    try { const { unlinkAdvertiser } = await import("./portal"); res.json(await unlinkAdvertiser(String(req.params.id), actorOf(req.headers.authorization))); } catch (e) { fail(res, e); }
   });
   r.post("/api/admin/listings/:lid", async (req, res) => {
     try { res.json(await setBid(req.params.lid, { bid_atomic: req.body?.bid_atomic, paused: req.body?.paused }, "admin")); } catch (e) { fail(res, e); }

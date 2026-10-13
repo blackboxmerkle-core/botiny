@@ -88,10 +88,19 @@ test("campaigns: list with pacing.ts fields, dry-run draft, insufficient balance
   const body = { listing_id: LID, bid_atomic: 200, incentive: { budget_atomic: 50_000, show_atomic: 10, click_atomic: 100 } };
   const d = await post("/v1/advertisers/me/campaigns", { ...body, dry_run: true }, tok);
   assert.equal(d.state, "draft"); assert.equal(d.summary.impression_cost_atomic, 300); assert.equal(d.summary.max_clicks, 454);
+  assert.equal(d.status, 200, "over-balance preview still 200"); assert.equal(d.summary.balance_before_atomic, 0); assert.equal(d.summary.balance_after_atomic, 0, "never negative");
+  assert.equal(d.summary.sufficient_balance, false); assert.equal(d.summary.shortfall_atomic, 50_000); assert.equal(d.summary.would_fail, "insufficient_balance");
+  for (const bad of [{ bid_atomic: -1 }, { bid_atomic: 1.5 }, { bid_atomic: 999999 }, { incentive: { budget_atomic: -5 } }, { incentive: { click_atomic: "x" } }]) {
+    const r = await post("/v1/advertisers/me/campaigns", { listing_id: LID, dry_run: true, ...bad }, tok); assert.equal(r.status, 400, JSON.stringify(bad)); assert.equal(r.error, "validation", JSON.stringify(r));
+  }
+  for (const bad of [{ bid_atomic: -1 }, { bid_atomic: "abc" }]) { const r = await fetch(`${base}/v1/advertisers/me/listings/${LID}/bid`, { method: "PUT", headers: { "content-type": "application/json", authorization: "Bearer " + tok }, body: JSON.stringify(bad) }).then(J); assert.equal(r.status, 400); assert.equal(r.error, "validation"); }
+  const bi = await fetch(`${base}/v1/advertisers/me/listings/${LID}/incentive`, { method: "PUT", headers: { "content-type": "application/json", authorization: "Bearer " + tok }, body: JSON.stringify({ budget_atomic: 0 }) }).then(J); assert.equal(bi.error, "validation");
+  const tu = await post("/v1/advertisers/me/topup?amount_atomic=5", {}, tok); assert.equal(tu.status, 400); assert.equal(tu.error, "validation");
   assert.equal((await post("/v1/advertisers/me/campaigns", body, tok)).error, "insufficient_balance");
   await admin("/api/admin/advertisers/adv:portal/credit", { amount_atomic: 100_000 });
   assert.equal((await post("/v1/advertisers/me/campaigns", { ...body, listing_id: "lst_nope" }, tok)).status, 404);
   assert.equal((await post("/v1/advertisers/me/campaigns", { ...body, bid_atomic: -1 }, tok)).status, 400);
+  const okd = await post("/v1/advertisers/me/campaigns", { ...body, dry_run: true }, tok); assert.equal(okd.summary.sufficient_balance, true); assert.equal(okd.summary.shortfall_atomic, 0); assert.equal(okd.summary.would_fail, null); assert.equal(okd.summary.balance_after_atomic, 50_000);
   const c = await post("/v1/advertisers/me/campaigns", body, tok);
   assert.equal(c.status, 201); assert.equal(c.state, "launched"); assert.equal(c.campaign.bid_atomic, 200); assert.equal(c.campaign.state, "active");
   const list = await get("/v1/advertisers/me/campaigns", tok);
@@ -100,6 +109,8 @@ test("campaigns: list with pacing.ts fields, dry-run draft, insufficient balance
   for (const k of ["status", "t_ppm", "lag_ppm", "boost_ppm", "budget_atomic", "consumed", "remaining", "pool", "offer_seq", "expires_ms"]) assert.ok(k in p, k);
   assert.ok(["on_track", "behind", "at_risk", "expired", "no_budget", "inactive"].includes(p.status));
   assert.equal(list.kpis.balance_atomic, 100_000);
+  const me = await get("/v1/advertisers/me", tok); assert.equal(me.balance_atomic, 100_000); assert.equal(typeof me.spend_atomic, "number"); assert.equal(me.balance, "100000", "deprecated string kept");
+  assert.ok(me.ledger.every((l: any) => typeof l.delta_atomic === "number"));
   const st = await get(`/v1/advertisers/me/listings/${LID}/stats?range=7d`, tok);
   assert.equal(st.status, 200); assert.equal(st.pacing.budget_atomic, 50_000); assert.ok(st.pacing_card); assert.ok(st.accounting);
   assert.equal((await get(`/v1/advertisers/me/campaigns/${LID}`, advKey)).listing_id, LID);
@@ -163,9 +174,9 @@ test("suggestion URL validation", () => {
 test("suggestions: submit / duplicate / rate limit / mine / admin accept -> crawler queue -> indexed|needs_review; reject; claim", async () => {
   _resetRateLimits();
   const tok = (await signIn(owner)).session_token;
-  assert.equal((await post("/v1/suggestions", { url: "http://10.0.0.1/x", type: "other", name: "n" })).error, "invalid_url");
-  assert.equal((await post("/v1/suggestions", { url: "https://ok.example.com", type: "nope", name: "n" })).error, "invalid_type");
-  assert.equal((await post("/v1/suggestions", { url: "https://ok.example.com", type: "other", name: "x".repeat(81) })).error, "invalid_name");
+  assert.equal((await post("/v1/suggestions", { url: "http://10.0.0.1/x", type: "other", name: "n" })).error, "validation");
+  assert.equal((await post("/v1/suggestions", { url: "https://ok.example.com", type: "nope", name: "n" })).error, "validation");
+  assert.equal((await post("/v1/suggestions", { url: "https://ok.example.com", type: "other", name: "x".repeat(81) })).error, "validation");
   _resetRateLimits();
   const s1 = await post("/v1/suggestions", { url: "https://weather-x402.example.com/api", type: "x402_api", name: "Weather x402", description: "Paid weather forecasts via x402", contact: "@weatherbot" }, tok);
   assert.equal(s1.status, 201); assert.equal(s1.state, "submitted"); assert.equal(s1.claim_wallet, owner.address.toLowerCase()); assert.ok(s1.claim.challenge);
@@ -257,7 +268,7 @@ test("error shape: {error: code, message} everywhere", async () => {
   const r = await get("/v1/nope"); assert.equal(r.status, 404); assert.equal(r.error, "not_found");
   const s = await get("/v1/auth/session"); assert.equal(s.error, "no_session"); assert.ok(s.message);
   const bj = await fetch(base + "/v1/suggestions", { method: "POST", headers: { "content-type": "application/json" }, body: "{bad" }).then(J); assert.equal(bj.status, 400); assert.equal(bj.error, "invalid_json");
-  const v = await post("/v1/suggestions", { url: "ftp://x.com", type: "other", name: "x" }); assert.equal(v.error, "invalid_url"); assert.match(v.message, /http/);
+  const v = await post("/v1/suggestions", { url: "ftp://x.com", type: "other", name: "x" }); assert.equal(v.error, "validation"); assert.match(v.message, /http/);
 });
 
 test("portal front end served same-origin at /portal (static allow-list, no CORS)", async () => {
@@ -268,4 +279,32 @@ test("portal front end served same-origin at /portal (static allow-list, no CORS
   for (const p of ["/portal/serve.py", "/portal/README.md", "/portal/test_fixtures.py", "/portal/..%2f..%2fbot-rec-market%2fapi%2f.env", "/portal/assets/../serve.py"]) assert.equal((await fetch(base + p)).status, 404, p);
   const pre = await fetch(base + "/v1/auth/session", { method: "OPTIONS", headers: { origin: "https://evil.example.com", "access-control-request-method": "GET" } });
   assert.equal(pre.headers.get("access-control-allow-origin"), null, "CORS stays off");
+});
+
+test("advertiser wallet unlink: DELETE /v1/advertisers/me/link (key or session, CSRF, audit), relink; admin unlink", async () => {
+  _resetRateLimits();
+  const k = (await admin("/api/admin/advertisers", { advertiser_id: "adv:unlink", name: "U" })).api_key;
+  const w = privateKeyToAccount(generatePrivateKey());
+  const s1 = await signIn(w, ["advertiser"], { api_key: k }); assert.ok(s1.roles.includes("advertiser"));
+  const ck = (await fetch(base + "/v1/auth/session", { headers: { authorization: "Bearer " + s1.session_token } })).headers; void ck;
+  // cookie DELETE without X-Botiny-Client => csrf
+  const v = await post("/v1/auth/siwe/verify", await siwe(w, { roles: ["advertiser"] }));
+  const cookie = v.headers.get("set-cookie")!.split(";")[0];
+  assert.equal((await fetch(base + "/v1/advertisers/me/link", { method: "DELETE", headers: { cookie } }).then(J)).error, "csrf");
+  assert.equal((await fetch(base + "/v1/advertisers/me/link", { method: "DELETE" }).then(J)).error, "advertiser_auth_required");
+  const u = await fetch(base + "/v1/advertisers/me/link", { method: "DELETE", headers: { cookie, "X-Botiny-Client": "portal" } }).then(J);
+  assert.equal(u.status, 200); assert.equal(u.address, w.address.toLowerCase()); assert.equal(u.unlinked, true);
+  assert.equal((await get("/v1/advertisers/me", s1.session_token)).error, "advertiser_auth_required", "role stripped from live sessions");
+  assert.ok(!(await get("/v1/auth/session", s1.session_token)).roles.includes("advertiser"));
+  assert.equal((await fetch(base + "/v1/advertisers/me/link", { method: "DELETE", headers: { authorization: "Bearer " + k } }).then(J)).error, "not_linked");
+  // relink with a different wallet, then unlink by API key, then admin unlink
+  const w2 = privateKeyToAccount(generatePrivateKey());
+  const s2 = await signIn(w2, ["advertiser"], { api_key: k }); assert.ok(s2.roles.includes("advertiser"), "relink after unlink");
+  assert.equal((await fetch(base + "/v1/advertisers/me/link", { method: "DELETE", headers: { authorization: "Bearer " + k } }).then(J)).status, 200);
+  const s3 = await signIn(w, ["advertiser"], { api_key: k }); assert.ok(s3.roles.includes("advertiser"), "original wallet can relink");
+  const st = await admin("/api/admin/state"); assert.equal(st.advertisers.find((a: any) => a.advertiser_id === "adv:unlink").linked_wallet, w.address.toLowerCase());
+  assert.equal((await admin("/api/admin/advertisers/adv:unlink/unlink", {})).unlinked, true);
+  assert.equal((await admin("/api/admin/advertisers/adv:unlink/unlink", {})).status, 404);
+  const aud = (await pool.query("SELECT actor, action FROM admin_audit WHERE action='advertiser_wallet_unlink' ORDER BY id")).rows;
+  assert.equal(aud.length, 3); assert.match(aud[0].actor, /advertiser-session/); assert.match(aud[1].actor, /advertiser-key/);
 });

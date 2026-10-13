@@ -16,8 +16,8 @@ import { activeBans, clientIp } from "./bans";
 import { assertPublicHost } from "../../crawler/src/suggest";
 
 const q = async (sql: string, p: any[] = []) => (await pool.query(sql, p)).rows;
-const err = (status: number, message: string, code?: string) => Object.assign(new Error(message), { status, code });
-const fail = (res: express.Response, e: any) => { res.locals.error = String(e?.message ?? e); res.status(e?.status ?? 500).json({ error: String(e?.message ?? e), ...(e?.code ? { code: e.code } : {}) }); };
+const err = (status: number, message: string, code?: string, field?: string) => Object.assign(new Error(message), { status, code, ...(field ? { field } : {}) });
+const fail = (res: express.Response, e: any) => { res.locals.error = String(e?.message ?? e); res.status(e?.status ?? 500).json({ error: String(e?.message ?? e), ...(e?.code ? { code: e.code } : {}), ...(e?.field ? { field: e.field } : {}) }); };
 const h = (fn: (req: express.Request, res: express.Response) => Promise<any>) => async (req: express.Request, res: express.Response) => { try { await fn(req, res); } catch (e) { fail(res, e); } };
 
 export const NONCE_TTL_MS = 5 * 60_000, SESSION_TTL_MS = 60 * 60_000;
@@ -130,6 +130,15 @@ function cookieFor(req: express.Request, token: string, maxAgeMs: number) {
   return `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(maxAgeMs / 1000)}${secure ? "; Secure" : ""}`;
 }
 
+/** Unlink the wallet mapped to an advertiser (if any); strips the advertiser role from that wallet's live sessions. */
+export async function unlinkAdvertiser(adv: string, actor: string) {
+  const r = (await q("DELETE FROM advertiser_wallets WHERE advertiser_id=$1 RETURNING address", [adv]))[0];
+  if (!r) throw err(404, "no wallet is linked to this advertiser", "not_linked");
+  await q("UPDATE portal_sessions SET roles=array_remove(roles,'advertiser') WHERE address=$1 AND revoked_at IS NULL", [r.address]);
+  await audit(actor, "advertiser_wallet_unlink", { advertiser_id: adv, address: r.address });
+  return { advertiser_id: adv, address: r.address, unlinked: true };
+}
+
 // ---------- suggestions ----------
 export const SUGGESTION_TYPES = ["x402_api", "mcp_server", "agent", "repo", "other"] as const;
 export const SUGGESTION_STATES = ["submitted", "queued", "crawling", "needs_review", "indexed", "rejected", "duplicate"] as const;
@@ -137,26 +146,26 @@ const OPEN_STATES = ["submitted", "queued", "crawling", "needs_review"];
 const BLOCKED_HOST = /(^|\.)(localhost|local|internal|intranet|lan|home|corp|localdomain|onion|invalid|test|example|arpa)$/i;
 /** Syntactic URL validation (SSRF-safe at submit time; the crawler re-checks DNS before fetching). Returns normalised URL or throws 400. */
 export function validateSuggestionUrl(raw: unknown): { url: string; norm: string; host: string } {
-  if (typeof raw !== "string" || !raw.trim() || raw.length > 2048) throw err(400, "url required (<=2048 chars)", "invalid_url");
-  let u: URL; try { u = new URL(raw.trim()); } catch { throw err(400, "url is not a valid absolute URL", "invalid_url"); }
-  if (u.protocol !== "https:" && u.protocol !== "http:") throw err(400, "url must be http(s)", "invalid_url");
-  if (u.username || u.password) throw err(400, "url must not contain credentials", "invalid_url");
-  if (u.port && !["80", "443"].includes(u.port)) throw err(400, "url port must be 80/443", "invalid_url");
+  if (typeof raw !== "string" || !raw.trim() || raw.length > 2048) throw err(400, "url required (<=2048 chars)", "validation", "url");
+  let u: URL; try { u = new URL(raw.trim()); } catch { throw err(400, "url is not a valid absolute URL", "validation", "url"); }
+  if (u.protocol !== "https:" && u.protocol !== "http:") throw err(400, "url must be http(s)", "validation", "url");
+  if (u.username || u.password) throw err(400, "url must not contain credentials", "validation", "url");
+  if (u.port && !["80", "443"].includes(u.port)) throw err(400, "url port must be 80/443", "validation", "url");
   const host = u.hostname.toLowerCase().replace(/\.$/, "");
-  if (/^[\d.]+$/.test(host) || host.includes(":") || host.startsWith("[")) throw err(400, "IP-address URLs are not accepted; use a hostname", "invalid_url");
-  if (!/^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}$/.test(host)) throw err(400, "url hostname must be a public DNS name", "invalid_url");
-  if (BLOCKED_HOST.test(host) && process.env.SUGGEST_ALLOW_TEST_HOSTS !== "1") throw err(400, "url hostname is not public", "invalid_url");
+  if (/^[\d.]+$/.test(host) || host.includes(":") || host.startsWith("[")) throw err(400, "IP-address URLs are not accepted; use a hostname", "validation", "url");
+  if (!/^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}$/.test(host)) throw err(400, "url hostname must be a public DNS name", "validation", "url");
+  if (BLOCKED_HOST.test(host) && process.env.SUGGEST_ALLOW_TEST_HOSTS !== "1") throw err(400, "url hostname is not public", "validation", "url");
   u.hash = "";
   const norm = `${u.protocol}//${u.host.toLowerCase()}${u.pathname.replace(/\/+$/, "") || ""}`;
   return { url: u.toString(), norm, host };
 }
 function validateSuggestion(b: any) {
   const { url, norm, host } = validateSuggestionUrl(b?.url);
-  if (!SUGGESTION_TYPES.includes(b?.type)) throw err(400, `type must be one of ${SUGGESTION_TYPES.join("|")}`, "invalid_type");
-  if (typeof b?.name !== "string" || !b.name.trim() || b.name.trim().length > 80) throw err(400, "name required (<=80 chars)", "invalid_name");
-  if (b.description != null && (typeof b.description !== "string" || b.description.length > 500)) throw err(400, "description <=500 chars", "invalid_description");
-  if (b.contact != null && b.contact !== "" && (typeof b.contact !== "string" || !(/^[^\s@]{1,64}@[^\s@]+\.[a-z]{2,}$/i.test(b.contact) || /^@[A-Za-z0-9_]{1,15}$/.test(b.contact)))) throw err(400, "contact must be an email or @handle", "invalid_contact");
-  if (b.claim_wallet != null && b.claim_wallet !== "" && !isAddress(String(b.claim_wallet), { strict: false })) throw err(400, "claim_wallet must be an EVM address", "invalid_claim_wallet");
+  if (!SUGGESTION_TYPES.includes(b?.type)) throw err(400, `type must be one of ${SUGGESTION_TYPES.join("|")}`, "validation", "type");
+  if (typeof b?.name !== "string" || !b.name.trim() || b.name.trim().length > 80) throw err(400, "name required (<=80 chars)", "validation", "name");
+  if (b.description != null && (typeof b.description !== "string" || b.description.length > 500)) throw err(400, "description <=500 chars", "validation", "description");
+  if (b.contact != null && b.contact !== "" && (typeof b.contact !== "string" || !(/^[^\s@]{1,64}@[^\s@]+\.[a-z]{2,}$/i.test(b.contact) || /^@[A-Za-z0-9_]{1,15}$/.test(b.contact)))) throw err(400, "contact must be an email or @handle", "validation", "contact");
+  if (b.claim_wallet != null && b.claim_wallet !== "" && !isAddress(String(b.claim_wallet), { strict: false })) throw err(400, "claim_wallet must be an EVM address", "validation", "claim_wallet");
   return { url, norm, host, type: b.type as string, name: b.name.trim(), description: b.description?.trim() || null, contact: b.contact || null,
     claim_wallet: b.claim_wallet ? String(b.claim_wallet).toLowerCase() : null };
 }
@@ -338,7 +347,7 @@ export function portalRouter() {
   }));
   r.get("/v1/suggestions", requireSession(), h(async (req, res) => {
     const s: Session = res.locals.session; const p: any[] = [s.address]; let w = "submitter_address=$1";
-    if (typeof req.query.state === "string" && req.query.state) { if (!SUGGESTION_STATES.includes(req.query.state as any)) throw err(400, "unknown state"); p.push(req.query.state); w += ` AND state=$${p.length}`; }
+    if (typeof req.query.state === "string" && req.query.state) { if (!SUGGESTION_STATES.includes(req.query.state as any)) throw err(400, "unknown state", "validation", "state"); p.push(req.query.state); w += ` AND state=$${p.length}`; }
     const cur = decCursor(req.query.cursor); if (cur) { p.push(cur.t, cur.id); w += ` AND (created_at, suggestion_id) < ($${p.length - 1}::timestamptz, $${p.length})`; }
     const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 100);
     const rows = await q(`SELECT * FROM listing_suggestions WHERE ${w} ORDER BY created_at DESC, suggestion_id DESC LIMIT ${limit}`, p);
@@ -357,7 +366,7 @@ export function portalRouter() {
     if (!s) return res.status(404).json({ error: "not found" });
     if (!s.claim_wallet || !s.claim) throw err(409, "suggestion has no claim_wallet", "no_claim_wallet");
     if (sess.address !== s.claim_wallet) throw err(403, "sign in with the claim_wallet to claim", "wrong_wallet");
-    const method = String(req.body?.method ?? ""); if (!["dns_txt", "well_known", "repo_file"].includes(method)) throw err(400, "method must be dns_txt|well_known|repo_file");
+    const method = String(req.body?.method ?? ""); if (!["dns_txt", "well_known", "repo_file"].includes(method)) throw err(400, "method must be dns_txt|well_known|repo_file", "validation", "method");
     let sigOk = false; try { sigOk = await verifyMessage({ address: s.claim_wallet, message: claimChallenge(s), signature: req.body?.signature }); } catch {}
     if (!sigOk) throw err(401, "signature over the claim challenge does not match claim_wallet", "bad_signature");
     const host = new URL(s.url).hostname;
@@ -397,7 +406,7 @@ export function portalRouter() {
   }));
   r.get("/v1/bots/me/:bot_id/stats", requireSession(), h(async (req, res) => {
     const s: Session = res.locals.session, W = await ownedWallets(s.address), bot = String(req.params.bot_id);
-    const range = String(req.query.range ?? "30d"); const R = RANGES[range]; if (!R) throw err(400, "range must be 24h|7d|30d");
+    const range = String(req.query.range ?? "30d"); const R = RANGES[range]; if (!R) throw err(400, "range must be 24h|7d|30d", "validation", "range");
     await assertOwnsBot(bot, W);
     const p = bot === NONE ? [W, R.ms] : [W, R.ms, bot], bf = botFilter(bot, 3);
     const base = `FROM requests r WHERE lower(r.payer)=ANY($1) AND ${bf} AND r.received_at > now() - ($2::bigint * interval '1 millisecond')`;
@@ -456,7 +465,7 @@ export function portalRouter() {
   }));
   r.post("/v1/bots/:bot_id/appeal", requireSession(), h(async (req, res) => {
     const s: Session = res.locals.session, W = await ownedWallets(s.address), bot = String(req.params.bot_id);
-    const msg = String(req.body?.message ?? "").trim(); if (msg.length < 10 || msg.length > 2000) throw err(400, "message 10..2000 chars");
+    const msg = String(req.body?.message ?? "").trim(); if (msg.length < 10 || msg.length > 2000) throw err(400, "message 10..2000 chars", "validation", "message");
     await assertOwnsBot(bot, W);
     const wallets = (await q(`SELECT DISTINCT lower(r.payer) w FROM requests r WHERE lower(r.payer)=ANY($1) AND ${botFilter(bot, 2)}`, bot === NONE ? [W] : [W, bot])).map(x => x.w);
     const ban: any = await banState(bot === NONE ? null : bot, wallets);
@@ -520,7 +529,7 @@ export async function listCampaigns(adv: string, all = false) {
     pacing_rule: (await import("./pacing")).PACING_RULE, campaigns: shown };
 }
 export async function listingStats(adv: string, lid: string, range: string) {
-  const R = RANGES[range]; if (!R) throw err(400, "range must be 24h|7d|30d");
+  const R = RANGES[range]; if (!R) throw err(400, "range must be 24h|7d|30d", "validation", "range");
   const { balance, rows } = await campaignRows(adv, lid);
   const c = rows[0];
   if (!c) { const o = (await q("SELECT provider_id FROM listings WHERE listing_id=$1", [lid]))[0]; throw o ? err(403, "not your listing") : err(404, "listing not found"); }
@@ -556,22 +565,26 @@ export async function listingStats(adv: string, lid: string, range: string) {
 }
 /** Launch/preview a campaign = set bid and (optionally) incentive offer through the existing append-only paths. */
 export async function createCampaign(adv: string, b: any) {
-  const lid = String(b?.listing_id ?? ""); if (!lid) throw err(400, "listing_id required");
+  const lid = String(b?.listing_id ?? ""); if (!lid) throw err(400, "listing_id required", "validation", "listing_id");
   const own = (await q("SELECT provider_id FROM listings l WHERE listing_id=$1 AND NOT EXISTS (SELECT 1 FROM listings n WHERE n.supersedes=l.listing_id)", [lid]))[0];
   if (!own) throw err(404, "listing not found (or superseded)"); if (own.provider_id !== adv) throw err(403, "not your listing (claimed listings only)");
   const { settings } = await currentSettings();
   const bid = b.bid_atomic ?? 0;
-  if (!Number.isSafeInteger(bid) || bid < 0 || bid > settings.max_bid_atomic) throw err(400, `bid_atomic must be integer 0..${settings.max_bid_atomic}`, "validation");
+  if (!Number.isSafeInteger(bid) || bid < 0 || bid > settings.max_bid_atomic) throw err(400, `bid_atomic must be integer 0..${settings.max_bid_atomic}`, "validation", "bid_atomic");
   const inc = b.incentive ?? null;
-  if (inc != null && typeof inc !== "object") throw err(400, "incentive must be an object", "validation");
+  if (inc != null && typeof inc !== "object") throw err(400, "incentive must be an object", "validation", "incentive");
   const days = inc?.expires_at ? Math.max((+new Date(inc.expires_at) - Date.now()) / 86_400_000, 0) : 30;
   const budget = inc?.budget_atomic ?? null, cost = settings.fixed_cpi_atomic + bid, balance = await balanceOf(pool, adv);
   const summary = { impression_cost_atomic: cost, base_price_atomic: settings.fixed_cpi_atomic, bid_atomic: bid, pool_atomic: budget, expires_in_days: Math.round(days * 100) / 100,
     daily_pacing_target_atomic: budget != null && days > 0 ? Math.round(budget / days) : null,
     max_clicks: budget != null && inc?.click_atomic ? Math.floor(budget / (inc.click_atomic + (inc.show_atomic ?? 0))) : null,
-    balance_before_atomic: balance, balance_after_atomic: balance - (budget ?? 0), rules: ["promoted results are labelled and count toward the 2-of-10 provider cap", "no refunds"] };
+    balance_before_atomic: balance, balance_after_atomic: Math.max(balance - (budget ?? 0), 0),
+    required_atomic: Math.max(cost, budget ?? 0), sufficient_balance: balance >= Math.max(cost, budget ?? 0), shortfall_atomic: Math.max(Math.max(cost, budget ?? 0) - balance, 0),
+    would_fail: balance >= Math.max(cost, budget ?? 0) ? null : "insufficient_balance", rules: ["promoted results are labelled and count toward the 2-of-10 provider cap", "no refunds"] };
+  for (const k of ["budget_atomic", "show_atomic", "click_atomic"] as const) { const v = inc?.[k]; if (v != null && (!Number.isSafeInteger(v) || v < 0 || (k === "budget_atomic" && v <= 0))) throw err(400, `incentive.${k} must be a non-negative integer${k === "budget_atomic" ? " > 0" : ""}`, "validation", "incentive." + k); }
+  if (inc?.expires_at != null && isNaN(+new Date(inc.expires_at))) throw err(400, "incentive.expires_at must be an ISO time", "validation", "incentive.expires_at");
   if (b.dry_run) return { status: 200, body: { state: "draft", listing_id: lid, summary } };
-  if (balance < cost || (budget != null && balance < budget)) throw Object.assign(err(409, "insufficient balance; top up first", "insufficient_balance"), { summary });
+  if (!summary.sufficient_balance) throw Object.assign(err(409, "insufficient balance; top up first", "insufficient_balance"), { summary });
   const bidRes = await setBid(lid, { bid_atomic: bid, paused: false }, "advertiser:" + adv, adv);
   const incRes = inc ? await setIncentive(lid, { show_atomic: inc.show_atomic, click_atomic: inc.click_atomic, budget_atomic: inc.budget_atomic, expires_at: inc.expires_at }, "advertiser:" + adv, adv) : null;
   const { rows } = await campaignRows(adv, lid);

@@ -20,7 +20,7 @@ import { issueClickLinks, pgEngine, scoreClick, settleIncentives, clawbackClick,
 
 export const botId = (req: express.Request) => { const b = req.get("X-Bot-Id"); return b && /^[A-Za-z0-9._:-]{1,64}$/.test(b) ? b : null; };
 const publicBase = (req: express.Request) => process.env.PUBLIC_BASE_URL?.replace(/\/$/, "") ?? `${req.protocol}://${req.get("host")}`;
-const fail = (res: express.Response, e: any) => { res.locals.error = String(e?.message ?? e); res.status(e?.status ?? 500).json({ error: String(e?.message ?? e) }); };
+const fail = (res: express.Response, e: any) => { res.locals.error = String(e?.message ?? e); res.status(e?.status ?? 500).json({ error: String(e?.message ?? e), ...(typeof e?.code === "string" ? { code: e.code } : {}), ...(e?.field ? { field: e.field } : {}) }); };
 export const TOPUP_MIN = 1000, TOPUP_MAX = 100_000; // 0.001 .. 0.1 test USDC per top-up
 
 export function createApp() {
@@ -168,6 +168,13 @@ export function createApp() {
       if (req.query.format === "csv") { res.type("text/csv").set("Content-Disposition", `attachment; filename="incentives-${res.locals.adv.replace(/\W/g, "_")}.csv"`).send(reportCsv(r)); } else res.json(r);
     } catch (e) { fail(res, e); }
   });
+  app.delete("/v1/advertisers/me/link", async (req, res, next) => {   // CSRF: cookie sessions must send X-Botiny-Client
+    const s = await sessionOf(req).catch(() => null);
+    if (s?.via === "cookie" && !req.get("X-Botiny-Client") && !/^Bearer adv_/.test(req.get("authorization") ?? "")) return res.status(403).json({ error: "csrf", message: "X-Botiny-Client header required for cookie-authenticated writes" });
+    next();
+  }, advAuth, async (_req, res) => {
+    try { const { unlinkAdvertiser } = await import("./portal"); res.json(await unlinkAdvertiser(res.locals.adv, res.locals.adv_via === "siwe" ? "advertiser-session:" + res.locals.adv : "advertiser-key:" + res.locals.adv)); } catch (e) { fail(res, e); }
+  });
   app.get("/v1/advertisers/me/campaigns", advAuth, async (req, res) => { try { res.json(await listCampaigns(res.locals.adv, req.query.all === "1")); } catch (e) { fail(res, e); } });
   app.get("/v1/advertisers/me/campaigns/:lid", advAuth, async (req, res) => { try { res.json(await listingStats(res.locals.adv, String(req.params.lid), String(req.query.range ?? "30d"))); } catch (e) { fail(res, e); } });
   app.get("/v1/advertisers/me/listings/:lid/stats", advAuth, async (req, res) => { try { res.json(await listingStats(res.locals.adv, String(req.params.lid), String(req.query.range ?? "30d"))); } catch (e) { fail(res, e); } });
@@ -255,7 +262,7 @@ export function createApp() {
   return app;
 }
 /** Default machine codes by HTTP status (used when a handler only supplied a human message). */
-export const ERROR_CODES: Record<number, string> = { 400: "bad_request", 401: "unauthorized", 402: "payment_required", 403: "forbidden", 404: "not_found", 409: "conflict", 413: "payload_too_large", 422: "unprocessable", 429: "rate_limited", 500: "internal_error", 502: "bad_gateway", 503: "unavailable" };
+export const ERROR_CODES: Record<number, string> = { 400: "validation", 401: "unauthorized", 402: "payment_required", 403: "forbidden", 404: "not_found", 409: "conflict", 413: "payload_too_large", 422: "unprocessable", 429: "rate_limited", 500: "internal_error", 502: "bad_gateway", 503: "unavailable" };
 const CODE_RE = /^[a-z][a-z0-9_]*$/;
 /** Normalise every JSON error body to {error: <code>, message, ...rest}. Handlers may send {error: code, message},
  *  {error: message, code} (portal helpers) or legacy {error: message}; the code then defaults from the status. */

@@ -40,7 +40,7 @@ export async function settingsAt(db: Q, version: number): Promise<Settings> {
 export async function saveSettings(patch: Partial<Settings>, note: string | null, by = "admin") {
   const cur = await currentSettings();
   const next = { ...cur.settings, ...patch };
-  const err = validateSettings(next); if (err) throw Object.assign(new Error(err), { status: 400 });
+  const err = validateSettings(next); if (err) throw Object.assign(new Error(err), { status: 400, code: "validation" });
   const r = await pool.query("INSERT INTO settings_versions(settings, note, changed_by) VALUES ($1,$2,$3) RETURNING version", [next, note, by]);
   return { version: r.rows[0].version as number, settings: next };
 }

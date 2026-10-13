@@ -8,20 +8,20 @@ const q = async (sql: string, p: any[] = []) => (await pool.query(sql, p)).rows;
 export type BanKind = "bot" | "wallet" | "ip";
 export function normalizeBan(kind: string, value: string): string {
   const v = String(value ?? "").trim();
-  if (kind === "bot") { if (!/^[A-Za-z0-9._:-]{1,64}$/.test(v)) throw Object.assign(new Error("bot id: 1-64 of [A-Za-z0-9._:-]"), { status: 400 }); return v; }
-  if (kind === "wallet") { if (!isAddress(v, { strict: false })) throw Object.assign(new Error("invalid wallet address"), { status: 400 }); return getAddress(v).toLowerCase(); }
+  if (kind === "bot") { if (!/^[A-Za-z0-9._:-]{1,64}$/.test(v)) throw Object.assign(new Error("bot id: 1-64 of [A-Za-z0-9._:-]"), { status: 400, code: "validation" }); return v; }
+  if (kind === "wallet") { if (!isAddress(v, { strict: false })) throw Object.assign(new Error("invalid wallet address"), { status: 400, code: "validation" }); return getAddress(v).toLowerCase(); }
   if (kind === "ip") {
     const [ip, bits] = v.split("/"); const fam = isIP(ip);
-    if (!fam || (bits !== undefined && !(Number.isInteger(+bits) && +bits >= 0 && +bits <= (fam === 4 ? 32 : 128)))) throw Object.assign(new Error("invalid IP or CIDR"), { status: 400 });
+    if (!fam || (bits !== undefined && !(Number.isInteger(+bits) && +bits >= 0 && +bits <= (fam === 4 ? 32 : 128)))) throw Object.assign(new Error("invalid IP or CIDR"), { status: 400, code: "validation" });
     return v;
   }
-  throw Object.assign(new Error("kind must be bot|wallet|ip"), { status: 400 });
+  throw Object.assign(new Error("kind must be bot|wallet|ip"), { status: 400, code: "validation" });
 }
 export async function addBan(b: { kind: BanKind; value: string; reason: string; expires_at?: string | null }, actor: string) {
-  if (!b.reason || String(b.reason).trim().length < 3) throw Object.assign(new Error("reason required"), { status: 400 });
+  if (!b.reason || String(b.reason).trim().length < 3) throw Object.assign(new Error("reason required"), { status: 400, code: "validation" });
   const value = normalizeBan(b.kind, b.value);
   const exp = b.expires_at ? new Date(b.expires_at) : null;
-  if (exp && (isNaN(+exp) || exp <= new Date())) throw Object.assign(new Error("expires_at must be a future time"), { status: 400 });
+  if (exp && (isNaN(+exp) || exp <= new Date())) throw Object.assign(new Error("expires_at must be a future time"), { status: 400, code: "validation" });
   const r = (await q(`INSERT INTO bans(kind,value,reason,expires_at,created_by) VALUES ($1,$2,$3,$4,$5) RETURNING *`, [b.kind, value, String(b.reason).slice(0, 300), exp, actor]))[0];
   await q("INSERT INTO ban_events(ban_id,event,details) VALUES ($1,'created',$2)", [r.ban_id, { actor, kind: b.kind, value, reason: r.reason, expires_at: exp }]);
   await audit(actor, "ban_create", { ban_id: r.ban_id, kind: b.kind, value, reason: r.reason, expires_at: exp });

@@ -27,7 +27,7 @@ export async function assertNonNegative(c: { query: PoolClient["query"] }, advs:
 }
 export const ADV_ID_RE = /^[A-Za-z0-9._:-]{1,64}$/;
 export async function createAdvertiser(id: string, name: string) {
-  if (!ADV_ID_RE.test(id)) throw Object.assign(new Error("bad advertiser_id"), { status: 400 });
+  if (!ADV_ID_RE.test(id)) throw Object.assign(new Error("bad advertiser_id"), { status: 400, code: "validation" });
   const key = "adv_" + randomBytes(24).toString("hex");
   await pool.query("INSERT INTO advertisers(advertiser_id,name,api_key_hash) VALUES ($1,$2,$3)", [id, name || id, sha256(key)]);
   return { advertiser_id: id, api_key: key };
@@ -37,7 +37,7 @@ export async function advertiserByKey(key: string | undefined | null) {
   return (await pool.query("SELECT advertiser_id, name FROM advertisers WHERE api_key_hash=$1", [sha256(key)])).rows[0] ?? null;
 }
 export async function credit(adv: string, amount: number, kind: "admin_credit" | "topup_x402", extra: { settle_tx?: string; payment_ref?: string; payer?: string; note?: string; payment_network?: string; payment_chain_id?: number | null; settle_via?: string; tos_version?: number; tos_hash?: string; tos_proof?: any; pay_to?: string } = {}) {
-  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > 10_000_000) throw Object.assign(new Error("amount_atomic must be 1..10000000"), { status: 400 });
+  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > 10_000_000) throw Object.assign(new Error("amount_atomic must be 1..10000000"), { status: 400, code: "validation" });
   return withMarketLock(async c => {
     const r = await c.query(`INSERT INTO balance_ledger(advertiser_id,delta_atomic,kind,settle_tx,payment_ref,payer,note,payment_network,payment_chain_id,settle_via,tos_version,tos_hash,tos_proof,pay_to)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING seq`,
@@ -53,7 +53,7 @@ export async function currentBid(c: { query: PoolClient["query"] }, listing: str
 export async function setBid(listing: string, patch: { bid_atomic?: number; paused?: boolean }, by: string, ownerCheck?: string) {
   const { settings } = await currentSettings();
   if (patch.bid_atomic !== undefined && (!Number.isSafeInteger(patch.bid_atomic) || patch.bid_atomic < 0 || patch.bid_atomic > settings.max_bid_atomic))
-    throw Object.assign(new Error(`bid_atomic must be integer 0..${settings.max_bid_atomic}`), { status: 400 });
+    throw Object.assign(new Error(`bid_atomic must be integer 0..${settings.max_bid_atomic}`), { status: 400, code: "validation" });
   return withMarketLock(async c => {
     const l = (await c.query("SELECT provider_id FROM listings WHERE listing_id=$1", [listing])).rows[0];
     if (!l) throw Object.assign(new Error("listing not found"), { status: 404 });
@@ -78,7 +78,13 @@ export async function advertiserSummary(adv: string) {
       (SELECT count(*)::int FROM impressions i WHERE i.listing_id=l.listing_id AND NOT i.sponsored) organic_impressions
     FROM listings l WHERE l.provider_id=$1 AND NOT EXISTS (SELECT 1 FROM listings n WHERE n.supersedes=l.listing_id) ORDER BY l.seq`, [adv]);
   const ledger = await q(`SELECT seq::int, created_at, kind, delta_atomic::text, request_id, listing_id, settle_tx, note FROM balance_ledger WHERE advertiser_id=$1 ORDER BY seq DESC LIMIT 50`, [adv]);
-  return { advertiser_id: adv, ...tot, listings, ledger };
+  const n = (x: any) => Number(x ?? 0);
+  return { advertiser_id: adv,
+    balance_atomic: n(tot.balance), topups_onchain_atomic: n(tot.topups_onchain), admin_credits_atomic: n(tot.admin_credits), spend_atomic: n(tot.spend),
+    sponsored_impressions: tot.sponsored_impressions,
+    // deprecated (strings, kept for existing readers such as scripts/sim-bots.ts): use the *_atomic integers above
+    balance: tot.balance, topups_onchain: tot.topups_onchain, admin_credits: tot.admin_credits, spend: tot.spend,
+    listings, ledger: ledger.map((l: any) => ({ ...l, delta_atomic: Number(l.delta_atomic) })) };
 }
 
 export const MAX_INCENTIVE_ATOMIC = 1_000_000;
@@ -86,11 +92,11 @@ export const MAX_INCENTIVE_ATOMIC = 1_000_000;
 export async function setIncentive(listing: string, patch: { show_atomic?: number; click_atomic?: number; budget_atomic?: number | null; expires_at?: string | null }, by: string, ownerCheck?: string) {
   for (const k of ["show_atomic", "click_atomic"] as const) {
     const v = patch[k];
-    if (v !== undefined && (!Number.isSafeInteger(v) || v < 0 || v > MAX_INCENTIVE_ATOMIC)) throw Object.assign(new Error(`${k} must be integer 0..${MAX_INCENTIVE_ATOMIC}`), { status: 400 });
+    if (v !== undefined && (!Number.isSafeInteger(v) || v < 0 || v > MAX_INCENTIVE_ATOMIC)) throw Object.assign(new Error(`${k} must be integer 0..${MAX_INCENTIVE_ATOMIC}`), { status: 400, code: "validation" });
   }
-  if (patch.budget_atomic != null && (!Number.isSafeInteger(patch.budget_atomic) || patch.budget_atomic <= 0 || patch.budget_atomic > 1_000_000_000_000)) throw Object.assign(new Error("budget_atomic must be integer 1..1e12"), { status: 400 });
+  if (patch.budget_atomic != null && (!Number.isSafeInteger(patch.budget_atomic) || patch.budget_atomic <= 0 || patch.budget_atomic > 1_000_000_000_000)) throw Object.assign(new Error("budget_atomic must be integer 1..1e12"), { status: 400, code: "validation" });
   let exp: Date | null = null;
-  if (patch.expires_at != null) { exp = new Date(patch.expires_at); if (isNaN(+exp) || exp <= new Date() || +exp - Date.now() > 366 * 86_400_000) throw Object.assign(new Error("expires_at must be a future time within 366 days"), { status: 400 }); }
+  if (patch.expires_at != null) { exp = new Date(patch.expires_at); if (isNaN(+exp) || exp <= new Date() || +exp - Date.now() > 366 * 86_400_000) throw Object.assign(new Error("expires_at must be a future time within 366 days"), { status: 400, code: "validation" }); }
   return withMarketLock(async c => {
     const l = (await c.query("SELECT provider_id FROM listings WHERE listing_id=$1", [listing])).rows[0];
     if (!l) throw Object.assign(new Error("listing not found"), { status: 404 });

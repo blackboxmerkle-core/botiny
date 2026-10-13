@@ -34,7 +34,7 @@ export function validatePayTo(address: string, confirm: string): string | null {
 }
 export async function setPayTo(address: string, confirm: string, actor: string, note: string | null) {
   const err = validatePayTo(address, confirm);
-  if (err) throw Object.assign(new Error(err), { status: 400 });
+  if (err) throw Object.assign(new Error(err), { status: 400, code: "validation" });
   const old = await payToState();
   if (old.pay_to === address) throw Object.assign(new Error("address unchanged"), { status: 409 });
   const r = (await q("INSERT INTO wallet_settings(pay_to,changed_by,note) VALUES ($1,$2,$3) RETURNING *", [address, actor, note]))[0];
@@ -55,17 +55,17 @@ function upsertEnv(lines: Record<string, string>) {
   writeFileSync(f, txt, { mode: 0o600 }); chmodSync(f, 0o600);
 }
 export async function rotateRelayer(input: { generate?: boolean; private_key?: string; confirm?: string }, actor: string) {
-  if (input.confirm !== "ROTATE") throw Object.assign(new Error('type ROTATE to confirm'), { status: 400 });
+  if (input.confirm !== "ROTATE") throw Object.assign(new Error('type ROTATE to confirm'), { status: 400, code: "validation" });
   let key: `0x${string}`;
   if (input.generate) key = generatePrivateKey();
   else {
     const k = String(input.private_key ?? "").trim();
-    if (!/^(0x)?[0-9a-fA-F]{64}$/.test(k)) throw Object.assign(new Error("private_key must be 32-byte hex"), { status: 400 });
+    if (!/^(0x)?[0-9a-fA-F]{64}$/.test(k)) throw Object.assign(new Error("private_key must be 32-byte hex"), { status: 400, code: "validation" });
     key = (k.startsWith("0x") ? k : "0x" + k) as `0x${string}`;
   }
   const address = privateKeyToAccount(key).address;
   const payer = process.env.PAYER_PRIVATE_KEY;
-  if (payer && privateKeyToAccount((payer.startsWith("0x") ? payer : "0x" + payer) as `0x${string}`).address === address) throw Object.assign(new Error("relayer must not be the payer wallet"), { status: 400 });
+  if (payer && privateKeyToAccount((payer.startsWith("0x") ? payer : "0x" + payer) as `0x${string}`).address === address) throw Object.assign(new Error("relayer must not be the payer wallet"), { status: 400, code: "validation" });
   const old = process.env.RELAYER_ADDRESS ?? (process.env.RELAYER_PRIVATE_KEY ? privateKeyToAccount(process.env.RELAYER_PRIVATE_KEY as `0x${string}`).address : null);
   upsertEnv({ RELAYER_PRIVATE_KEY: key, RELAYER_ADDRESS: address });
   process.env.RELAYER_PRIVATE_KEY = key; process.env.RELAYER_ADDRESS = address;
