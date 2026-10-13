@@ -35,11 +35,11 @@ export async function revokeBan(id: number, actor: string) {
   return r;
 }
 export const activeBans = () => q("SELECT * FROM bans WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())");
+/** Client IP = Express req.ip with `trust proxy` = loopback only (set in createApp). X-Forwarded-For is honoured only
+ *  when the TCP peer is loopback (ngrok's local agent); a direct non-loopback peer's XFF is ignored. Used for bans,
+ *  rate limits and click IPs alike. */
 export function clientIp(req: express.Request) {
-  // LAST X-Forwarded-For entry = the hop appended by our proxy (ngrok); earlier entries are client-controlled.
-  const xf = String(req.headers["x-forwarded-for"] ?? "").split(",").map(x => x.trim()).filter(Boolean).pop() ?? "";
-  const ip = (xf || req.socket.remoteAddress || "").replace(/^::ffff:/, "");
-  return ip;
+  return String(req.ip ?? req.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
 }
 /** Payer wallet from an X-PAYMENT header without verifying it (mock: "mock:<n>:<0xpayer>"; x402: authorization.from). */
 export function payerFromHeader(h?: string): string | null {

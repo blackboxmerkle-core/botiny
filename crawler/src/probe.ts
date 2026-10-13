@@ -1,5 +1,6 @@
 import { q } from "./db";
 import { UA, waitForHost, robotsAllowed } from "./http";
+import { safeFetch } from "./safe-fetch";
 /** Decode an x402 challenge from a 402 response: JSON body {accepts:[...]} (v1) or PAYMENT-REQUIRED header (base64 JSON, v2). */
 export function decode402(status: number, headers: Headers | Record<string, string>, bodyText: string) {
   const get = (k: string) => headers instanceof Headers ? headers.get(k) : (headers as any)[k.toLowerCase()] ?? null;
@@ -25,12 +26,12 @@ export async function probeItem(item_id: string) {
     if (!(await robotsAllowed(url))) rec.error = "robots.txt disallows";
     else {
       await waitForHost(new URL(url).host, 2000);
-      const r = await fetch(url, { method, headers: { "user-agent": UA, accept: "application/json", ...(method === "POST" ? { "content-type": "application/json" } : {}) },
-        body: method === "POST" ? "{}" : undefined, redirect: "manual", signal: AbortSignal.timeout(10000) });
-      const text = (await r.text()).slice(0, 20000);
-      rec.http_status = r.status; rec.x402 = decode402(r.status, r.headers, text); rec.ok_402 = !!rec.x402;
+      // SSRF-safe; redirects are NOT followed (a probe is ONE unpaid request), 10s, 20 KB
+      const r = await safeFetch(url, { method, headers: { "user-agent": UA, accept: "application/json", ...(method === "POST" ? { "content-type": "application/json" } : {}) },
+        body: method === "POST" ? "{}" : undefined, followRedirects: false, timeoutMs: 10000, maxBytes: 20000, truncate: true });
+      rec.http_status = r.status; rec.x402 = decode402(r.status, r.headers, r.text()); rec.ok_402 = !!rec.x402;
     }
-  } catch (e: any) { rec.error = String(e?.cause?.code ?? e?.message ?? e).slice(0, 200); }
+  } catch (e: any) { rec.error = e?.code === "blocked_address" ? "blocked: " + e.message : String(e?.cause?.code ?? e?.code ?? e?.message ?? e).slice(0, 200); }
   rec.ms = Date.now() - t0;
   await q(`INSERT INTO crawl_probes(item_id,url,method,http_status,ok_402,x402,error,ms) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
     [item_id, url, method, rec.http_status, rec.ok_402, rec.x402, rec.error, rec.ms]);

@@ -1,4 +1,5 @@
 import { q } from "./db";
+import { safeFetch } from "./safe-fetch";
 /** Identifying UA with contact URL. */
 export const UA = process.env.CRAWLER_UA ?? "botsource-crawler/0.1 (+https://github.com/blackboxmerkle-core/botsource; bot-service discovery; contact via repo issues)";
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -26,9 +27,9 @@ export async function robotsAllowed(url: string): Promise<boolean> {
     let txt = "";
     try {
       await waitForHost(u.host);
-      const r = await fetch(`${u.protocol}//${u.host}/robots.txt`, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(8000), redirect: "follow" });
-      txt = r.ok ? (await r.text()).slice(0, 100_000) : "";
-    } catch { txt = ""; }
+      const r = await safeFetch(`${u.protocol}//${u.host}/robots.txt`, { headers: { "user-agent": UA }, timeoutMs: 8000, maxBytes: 100_000, truncate: true, maxRedirects: 5 });
+      txt = r.ok ? r.text() : "";
+    } catch (e: any) { if (e?.code === "blocked_address") throw e; txt = ""; }   // SSRF-blocked host: never cache, never fetch
     await q(`INSERT INTO crawl_hosts(host, robots_txt, robots_fetched_at) VALUES ($1,$2,now())
       ON CONFLICT (host) DO UPDATE SET robots_txt=$2, robots_fetched_at=now()`, [u.host, txt]);
     row = { robots_txt: txt };
@@ -57,19 +58,19 @@ export function isAllowed(robots: string, path: string, agent = "botsource-crawl
   return best[0] === "allow";
 }
 
-export async function politeJson(url: string, opts: { minIntervalMs?: number; timeoutMs?: number; retries?: number } = {}): Promise<any> {
+export async function politeJson(url: string, opts: { minIntervalMs?: number; timeoutMs?: number; retries?: number; maxBytes?: number } = {}): Promise<any> {
   const host = new URL(url).host;
   let lastErr: any;
   for (let i = 0; i <= (opts.retries ?? 2); i++) {
     await waitForHost(host, opts.minIntervalMs ?? 1000);
     try {
-      const r = await fetch(url, { headers: { "user-agent": UA, accept: "application/json" }, signal: AbortSignal.timeout(opts.timeoutMs ?? 30000) });
+      const r = await safeFetch(url, { headers: { "user-agent": UA, accept: "application/json" }, timeoutMs: opts.timeoutMs ?? 30000, maxBytes: opts.maxBytes ?? 50_000_000, maxRedirects: 5 });
       if (r.status === 429 || r.status >= 500) { lastErr = new Error(`HTTP ${r.status}`); await sleep(2000 * (i + 1) ** 2); continue; }
-      if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status} ${(await r.text()).slice(0, 120)}`), { status: r.status, fatal: true });
-      const ct = r.headers.get("content-type") ?? "";
+      if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status} ${r.text().slice(0, 120)}`), { status: r.status, fatal: true });
+      const ct = r.headers["content-type"] ?? "";
       if (!ct.includes("json")) throw Object.assign(new Error(`non-JSON response (${ct.slice(0, 40)}) — endpoint moved?`), { fatal: true });
-      return await r.json();
-    } catch (e: any) { lastErr = e; if (e.fatal) throw e; await sleep(1000 * (i + 1)); }
+      return r.json();
+    } catch (e: any) { lastErr = e; if (e.fatal || e.code === "blocked_address" || e.code === "too_large") throw e; await sleep(1000 * (i + 1)); }
   }
   throw lastErr;
 }

@@ -64,8 +64,7 @@ export async function rotateRelayer(input: { generate?: boolean; private_key?: s
     key = (k.startsWith("0x") ? k : "0x" + k) as `0x${string}`;
   }
   const address = privateKeyToAccount(key).address;
-  const payer = process.env.PAYER_PRIVATE_KEY;
-  if (payer && privateKeyToAccount((payer.startsWith("0x") ? payer : "0x" + payer) as `0x${string}`).address === address) throw Object.assign(new Error("relayer must not be the payer wallet"), { status: 400, code: "validation" });
+  if ((await import("./facilitator")).isPayerAddress(address)) throw Object.assign(new Error("relayer must not be the payer wallet"), { status: 400, code: "validation" });
   const old = process.env.RELAYER_ADDRESS ?? (process.env.RELAYER_PRIVATE_KEY ? privateKeyToAccount(process.env.RELAYER_PRIVATE_KEY as `0x${string}`).address : null);
   upsertEnv({ RELAYER_PRIVATE_KEY: key, RELAYER_ADDRESS: address });
   process.env.RELAYER_PRIVATE_KEY = key; process.env.RELAYER_ADDRESS = address;

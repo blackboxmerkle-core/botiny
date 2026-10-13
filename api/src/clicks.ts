@@ -135,8 +135,8 @@ export async function issueClickLinks(client: PoolClient, a: {
   const zero = (bad: Set<string>) => { ranked = ranked.map(r => bad.has(r.cluster_id) ? { ...r, show_offer_atomic: 0, click_offer_atomic: 0 } : r); };
   const zeroL = (bad: Set<string>) => { ranked = ranked.map(r => bad.has(r.listing_id) ? { ...r, show_offer_atomic: 0, click_offer_atomic: 0 } : r); };
   const poolSums = async (l: string) => { const r = (await client.query(`SELECT
-      COALESCE(SUM(amount_atomic) FILTER (WHERE kind IN ('returned_unearned','returned_clawback')),0) - COALESCE(SUM(amount_atomic) FILTER (WHERE kind IN ('pool_draw','expired_revenue')),0) AS pool,
-      COALESCE(SUM(amount_atomic) FILTER (WHERE kind='funded'),0) AS funded FROM incentive_pool_ledger WHERE listing_id=$1`, [l])).rows[0];
+      COALESCE(SUM(amount_atomic) FILTER (WHERE kind IN ('returned_unearned','returned_clawback','void_draw')),0) - COALESCE(SUM(amount_atomic) FILTER (WHERE kind IN ('pool_draw','expired_revenue')),0) AS pool,
+      COALESCE(SUM(amount_atomic) FILTER (WHERE kind='funded'),0) - COALESCE(SUM(amount_atomic) FILTER (WHERE kind='void_funded'),0) AS funded FROM incentive_pool_ledger WHERE listing_id=$1`, [l])).rows[0];
     return { pool: Number(r.pool), funded: Number(r.funded) }; };
   // cheap pre-check against the live balance (pool draws only make it cheaper)
   { const per = new Map<string, number>(); for (const { p, amt } of needsL().values()) per.set(p, (per.get(p) ?? 0) + amt);
@@ -248,7 +248,7 @@ export async function settleIncentives(now = Date.now()) {
       WITH cur AS (SELECT DISTINCT ON (o.listing_id) o.listing_id, COALESCE(o.expires_at, (SELECT MIN(f.created_at) FROM incentive_offers f WHERE f.listing_id=o.listing_id) + interval '30 days') exp
                      FROM incentive_offers o ORDER BY o.listing_id, o.seq DESC),
            pl AS (SELECT listing_id, MIN(provider_id) provider_id,
-                    COALESCE(SUM(amount_atomic) FILTER (WHERE kind IN ('returned_unearned','returned_clawback')),0) - COALESCE(SUM(amount_atomic) FILTER (WHERE kind IN ('pool_draw','expired_revenue')),0) AS bal
+                    COALESCE(SUM(amount_atomic) FILTER (WHERE kind IN ('returned_unearned','returned_clawback','void_draw')),0) - COALESCE(SUM(amount_atomic) FILTER (WHERE kind IN ('pool_draw','expired_revenue')),0) AS bal
                     FROM incentive_pool_ledger GROUP BY 1)
       SELECT pl.* FROM pl JOIN cur USING (listing_id) WHERE pl.bal > 0 AND cur.exp <= to_timestamp($1::float8/1000) ORDER BY 1`, [now])).rows;
     let expired_revenue_atomic = 0;

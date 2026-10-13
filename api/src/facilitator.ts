@@ -34,11 +34,20 @@ export function relayerAccount() {
   const raw = process.env.RELAYER_PRIVATE_KEY;
   if (!raw) return null;
   const acct = privateKeyToAccount((raw.startsWith("0x") ? raw : "0x" + raw) as `0x${string}`);
-  const payer = process.env.PAYER_PRIVATE_KEY;
-  if (payer && privateKeyToAccount((payer.startsWith("0x") ? payer : "0x" + payer) as `0x${string}`).address === acct.address)
-    throw new Error("RELAYER_PRIVATE_KEY must not be the payer key");
+  if (isPayerAddress(acct.address)) throw new Error("RELAYER_PRIVATE_KEY must not be the payer key");
   return acct;
 }
+/** Every configured payer address (lowercase): PAYER_ADDRESS, PAYER_ADDRESSES (comma list), the simulator payer default
+ *  in chain.ts, and the address of PAYER_PRIVATE_KEY if that key happens to be set. Works with no payer key present. */
+export function payerAddresses(): Set<string> {
+  const out = new Set<string>();
+  for (const a of [process.env.PAYER_ADDRESS, ...(process.env.PAYER_ADDRESSES ?? "").split(","), DEFAULT_SIM_PAYER]) if (a && /^0x[0-9a-fA-F]{40}$/.test(a.trim())) out.add(a.trim().toLowerCase());
+  const k = process.env.PAYER_PRIVATE_KEY;
+  if (k) try { out.add(privateKeyToAccount((k.startsWith("0x") ? k : "0x" + k) as `0x${string}`).address.toLowerCase()); } catch {}
+  return out;
+}
+export const isPayerAddress = (a: string) => payerAddresses().has(a.toLowerCase());
+const DEFAULT_SIM_PAYER = "0x0b68c3ecBB5DC0E79a4399eE7eA43d07Cb9A5402";   // public address of the simulator payer (chain.ts PAYER default)
 function viemRpc(c: EvmChain): ChainRpc {
   const chain = defineChain({ id: c.chainId, name: c.label, nativeCurrency: { name: c.native, symbol: c.native, decimals: 18 }, rpcUrls: { default: { http: [c.rpc] } }, testnet: c.testnet });
   const pub = createPublicClient({ chain, transport: http(c.rpc, { timeout: 20_000 }) });
@@ -94,7 +103,7 @@ export async function verifyExact(p: ExactPayload, c: EvmChain, req: { amount: b
     if (await rpc.authorizationState(a.from, a.nonce)) return { ok: false, reason: "nonce_reused: authorization already used on-chain" };
     const bal = await rpc.balanceOf(a.from);
     if (bal < BigInt(a.value)) return { ok: false, reason: `insufficient_funds: payer USDC balance ${bal} < ${a.value}` };
-  } catch (e: any) { return { ok: false, reason: "rpc_error: " + String(e?.shortMessage ?? e?.message ?? e).slice(0, 200) }; }
+  } catch (e: any) { console.error("verify rpc_error", String(e?.shortMessage ?? e?.message ?? e).slice(0, 500)); return { ok: false, reason: "rpc_error (chain RPC unavailable, try again)" }; }
   return { ok: true, payer: getAddress(a.from) };
 }
 export async function settleExact(p: ExactPayload, c: EvmChain, rpc: ChainRpc = rpcFor(c)): Promise<{ ok: boolean; tx?: string; error?: string }> {

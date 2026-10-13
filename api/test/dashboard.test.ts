@@ -3,8 +3,8 @@ const TOSH = tosHashOf(DEFAULT_TOS.bot), TOSA = tosHashOf(DEFAULT_TOS.advertiser
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-process.env.DASHBOARD_PASSWORD = "test-pass";
-const AUTH = { authorization: "Basic " + Buffer.from("admin:test-pass").toString("base64") };
+process.env.DASHBOARD_PASSWORD = "Test-Pass-0123456789";
+const AUTH = { authorization: "Basic " + Buffer.from("admin:Test-Pass-0123456789").toString("base64") };
 import { createApp } from "../src/app";
 import { pool } from "../src/db";
 import { resetTestDb as seed } from "../src/seed";
@@ -74,7 +74,7 @@ test("older entries stay reachable: pagination, search, legacy rows, settle_fail
   const f = await fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json", "X-TOS-ACCEPT": TOSH, "X-PAYMENT": "mock:sf" + Date.now() }, body: JSON.stringify({ query: "settle fail", k: 1 }) });
   delete process.env.MOCK_SETTLE_FAIL;
   const fj = await f.json();
-  assert.equal(f.status, 402); assert.equal(fj.reason, "mock_settle_failure");
+  assert.equal(f.status, 402); assert.equal(fj.error, "settlement_failed"); assert.ok(!("reason" in fj));
   const d = await (await fetch(base + "/dashboard/api/requests/" + fj.request_id, { headers: AUTH })).json();
   assert.equal(d.payment_status, "settle_failed"); assert.equal(d.settle_error, "mock_settle_failure");
   assert.equal((await (await fetch(base + "/v1/requests/" + fj.request_id + "/replay")).json()).match, true);

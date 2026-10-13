@@ -15,16 +15,38 @@ import { payToState } from "./wallets";
 import { activeChains, relayerAddress } from "./relayer";
 import { currentSettings } from "./settings";
 import { MARKET_LOCK, marketSeq, assertNonNegative, advertiserByKey, advertiserSummary, setBid, setIncentive, credit } from "./market";
-import { portalRouter, suggestionsAdminRouter, sessionAdvertiser, sessionOf, listCampaigns, listingStats, createCampaign } from "./portal";
+import { portalRouter, suggestionsAdminRouter, sessionAdvertiser, sessionOf, listCampaigns, listingStats, createCampaign, rateLimit } from "./portal";
+import { payerFromHeader } from "./bans";
+import { voidUnbilledRequest } from "./compensate";
 import { issueClickLinks, pgEngine, scoreClick, settleIncentives, clawbackClick, clearReview, earnings, clickKeys } from "./clicks";
 
 export const botId = (req: express.Request) => { const b = req.get("X-Bot-Id"); return b && /^[A-Za-z0-9._:-]{1,64}$/.test(b) ? b : null; };
 const publicBase = (req: express.Request) => process.env.PUBLIC_BASE_URL?.replace(/\/$/, "") ?? `${req.protocol}://${req.get("host")}`;
-const fail = (res: express.Response, e: any) => { res.locals.error = String(e?.message ?? e); res.status(e?.status ?? 500).json({ error: String(e?.message ?? e), ...(typeof e?.code === "string" ? { code: e.code } : {}), ...(e?.field ? { field: e.field } : {}) }); };
+const fail = (res: express.Response, e: any) => { res.locals.error = String(e?.message ?? e); res.status(e?.status ?? 500).json({ error: String(e?.message ?? e), ...(typeof e?.code === "string" ? { code: e.code } : {}), ...(e?.field ? { field: e.field } : {}) }); };   // 5xx text is replaced by errorShape
+/** Public redaction of a payer wallet: 0xabcd…1234 (non-wallet payers: first 6 chars + …). */
+export const redactPayer = (p: string | null) => !p ? null : /^0x[0-9a-fA-F]{40}$/.test(p) ? `${p.slice(0, 6)}…${p.slice(-4)}`.toLowerCase() : String(p).slice(0, 6) + "…";
+/** Per-IP / per-wallet fixed-window limits (in-process). Generous defaults so sim bots never hit them; env-tunable
+ *  (RL_<NAME>_IP / RL_<NAME>_WALLET per minute). Direct loopback clients (local scripts, supervise health checks) are
+ *  exempt unless RL_EXEMPT_LOOPBACK=0; ngrok traffic carries the real client IP (trust proxy = loopback). */
+export function limit(name: string, perIpMin: number, perWalletMin?: number): express.RequestHandler {
+  return (req, res, next) => {
+    const ip = clientIp(req);
+    if (process.env.RL_EXEMPT_LOOPBACK !== "0" && /^(127\.|::1$)/.test(ip) && !req.get("x-forwarded-for")) return next();
+    const N = name.toUpperCase();
+    try {
+      rateLimit(`${name}:ip:${ip}`, Number(process.env[`RL_${N}_IP`] ?? perIpMin), 60_000);
+      const w = perWalletMin ? payerFromHeader(req.get("X-PAYMENT")) ?? (/^0x[0-9a-fA-F]{40}$/.test(req.get("X-Bot-Wallet") ?? "") ? req.get("X-Bot-Wallet")!.toLowerCase() : null) : null;
+      if (w) rateLimit(`${name}:wallet:${w}`, Number(process.env[`RL_${N}_WALLET`] ?? perWalletMin), 60_000);
+    } catch (e: any) { if (e?.retryAfter) res.set("Retry-After", String(e.retryAfter)); return res.status(429).json({ error: "rate_limited", message: `too many ${name} requests; retry after ${e?.retryAfter ?? 60}s` }); }
+    next();
+  };
+}
 export const TOPUP_MIN = 1000, TOPUP_MAX = 100_000; // 0.001 .. 0.1 test USDC per top-up
 
 export function createApp() {
   const app = express();
+  app.set("trust proxy", "loopback");   // only ngrok's local agent (loopback) may set X-Forwarded-For; see bans.clientIp
+  app.disable("x-powered-by");
   app.use(express.json({ limit: "64kb", verify: (req: any, _res, buf) => { req.rawBody = buf.toString("utf8"); } }));
   app.use(apiLogger());
   app.use(errorShape());                                          // every error body => {error: <code>, message, ...extra}
@@ -53,7 +75,7 @@ export function createApp() {
     res.status(201).json(await insertListing(req.body));
   });
 
-  app.post("/v1/recommend", banGuard(), async (req, res) => {
+  app.post("/v1/recommend", banGuard(), limit("recommend", 600, 300), async (req, res) => {   // limited BEFORE the payment gate
     const inp = normalizeInput(req.body);
     if (typeof inp === "string") return res.status(400).json({ error: inp });
     const { version: settings_version, settings } = await currentSettings();   // price + ranking rules pinned here
@@ -112,19 +134,25 @@ export function createApp() {
       await client.query("ROLLBACK").catch(() => {});
       res.locals.error = String(e?.message ?? e);
       if (e?.code === "23505") return res.status(409).json({ error: "payment already used" });
-      return res.status(500).json({ error: "internal error", detail: String(e?.message ?? e) });
+      console.error("recommend", request_id, e?.stack ?? e);
+      return res.status(500).json({ error: "internal_error", message: "internal error", request_id });
     } finally { client.release(); }
 
     const s = await settlePayment(pay).catch((e: any) => ({ ok: false, error: "exception: " + String(e?.shortMessage ?? e?.message ?? e).slice(0, 480) } as any));
     await pool.query("UPDATE requests SET payment_status=$2, settle_tx=$3, settle_error=$4, settle_via=$5 WHERE request_id=$1",
       [request_id, s.ok ? "settled" : "settle_failed", s.tx ?? null, s.ok ? null : (s.error ?? "unknown"), s.via ?? pay.settle_via]);
-    if (!s.ok) res.locals.error = "settlement failed: " + (s.error ?? "unknown");
+    if (!s.ok) {
+      res.locals.error = "settlement failed: " + (s.error ?? "unknown");   // full RPC/facilitator text: server-side log + admin dashboard only
+      console.error("settle_failed", request_id, s.error);
+      // not billed: reverse impression debits + click escrow and void the links in a follow-up transaction (see compensate.ts)
+      const v = await voidUnbilledRequest(request_id).catch((e: any) => { console.error("void", request_id, e?.stack ?? e); return null; });
+      return res.status(402).json({ error: "settlement_failed", message: "Payment settlement failed; you were not charged and this request was not billed.", request_id, billed: false, voided: !!v?.voided });
+    }
     if (s.header) res.set("X-PAYMENT-RESPONSE", s.header);
-    if (!s.ok) return res.status(402).json({ error: "settlement failed", reason: s.error ?? "unknown", request_id });
     res.json({ request_id, response_hash: out.hash, response: out.body, click_links, payment: { network: pay.network, settle_tx: s.tx ?? null, settle_via: s.via }, tos: { version: tos.tos_version, sha256: tos.tos_hash, proof: tos.proof } });
   });
 
-  app.get("/v1/requests/:id/replay", async (req, res) => {
+  app.get("/v1/requests/:id/replay", limit("replay", 120), async (req, res) => {
     const r = (await pool.query("SELECT * FROM requests WHERE request_id=$1", [req.params.id])).rows[0];
     if (!r) return res.status(404).json({ error: "not found" });
     const p = JSON.parse(r.request_canonical);
@@ -135,15 +163,17 @@ export function createApp() {
         request_hash_ok: sha256(r.request_canonical) === r.request_hash, catalogue_seq: Number(r.catalogue_seq),
         market_seq: r.market_seq == null ? null : Number(r.market_seq), settings_version: r.settings_version, ranker_version: r.ranker_version,
         tos: r.tos_version == null ? null : { version: r.tos_version, sha256: r.tos_hash, proof: r.tos_proof }, payment: { network: r.payment_network, chain_id: r.payment_chain_id, settle_tx: r.settle_tx, settle_via: r.settle_via, pay_to: r.pay_to } });
-    } catch (e: any) { res.status(409).json({ error: String(e.message) }); }
+    } catch (e: any) { console.error("replay", r.request_id, e?.stack ?? e); res.status(409).json({ error: "replay_failed", message: "replay could not be computed for this request" }); }
   });
 
-  app.get("/v1/requests/:id", async (req, res) => {
+  app.get("/v1/requests/:id", limit("request", 600), async (req, res) => {
+    // PUBLIC (bots verify with it): payer is redacted to a short form + salted-free sha256 (match your own wallet), no settle_error, no db_txid.
     const r = (await pool.query(`SELECT request_id,received_at,catalogue_seq,market_seq,settings_version,embedding_model,ranker_version,request_canonical,request_hash,
-      response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_status,settle_tx,settle_error,db_txid,bot_id,payment_chain_id,settle_via,tos_version,tos_hash,tos_proof,pay_to FROM requests WHERE request_id=$1`, [req.params.id])).rows[0];
+      response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_status,billing_status,settle_tx,bot_id,payment_chain_id,settle_via,tos_version,tos_hash,tos_proof,pay_to FROM requests WHERE request_id=$1`, [req.params.id])).rows[0];
     if (!r) return res.status(404).json({ error: "not found" });
     const imp = (await pool.query("SELECT rank,listing_id,provider_id,sponsored,fixed_atomic,bid_atomic,charge_micro_usdc FROM impressions WHERE request_id=$1 ORDER BY rank", [req.params.id])).rows;
-    res.json({ ...r, impressions: imp });
+    const { payer, ...pub } = r;
+    res.json({ ...pub, payer: redactPayer(payer), payer_sha256: payer ? sha256(String(payer).toLowerCase()) : null, impressions: imp });
   });
   app.get("/v1/audit/providers/:id", basicAuth(), async (req, res) => {
     const rows = (await pool.query(`SELECT i.listing_id, COUNT(*)::int AS impressions, COUNT(*) FILTER (WHERE sponsored)::int AS sponsored, SUM(i.charge_micro_usdc)::text AS spend_micro_usdc
@@ -206,16 +236,16 @@ export function createApp() {
       res.status(r.status); r.headers.forEach((v, k) => res.set(k, v)); res.send(Buffer.from(await r.arrayBuffer()));
     } catch (e) { fail(res, e); }
   };
-  app.get("/c/:code", (req, res) => clickHandler(req, res, "/" + req.params.code));
-  app.get("/c/:code/preview", (req, res) => clickHandler(req, res, "/" + req.params.code + "/preview"));
-  app.get("/r/:token", (req, res) => clickHandler(req, res, "/r/" + req.params.token));
-  app.get("/c/r/:token", (req, res) => clickHandler(req, res, "/r/" + req.params.token));   // track_url = CLICK_SHORT_BASE + /r/<token>
+  app.get("/c/:code", limit("click", 300), (req, res) => clickHandler(req, res, "/" + req.params.code));
+  app.get("/c/:code/preview", limit("click", 300), (req, res) => clickHandler(req, res, "/" + req.params.code + "/preview"));
+  app.get("/r/:token", limit("click", 300), (req, res) => clickHandler(req, res, "/r/" + req.params.token));
+  app.get("/c/r/:token", limit("click", 300), (req, res) => clickHandler(req, res, "/r/" + req.params.token));   // track_url = CLICK_SHORT_BASE + /r/<token>
   app.get("/.well-known/botsource-keys", async (_req, res) => {
     const k = await clickKeys(); if (!k) return res.json({ keys: [] });
     const jwk = await crypto.subtle.exportKey("jwk", k.publicKey); res.json({ keys: [{ kty: jwk.kty, crv: jwk.crv, x: jwk.x, kid: k.kid, use: "sig", alg: "EdDSA" }] });
   });
   // Bot proof claim. Bound to the paying wallet via an EIP-191 signed request (X-Bot-Wallet/-Signature/-Timestamp).
-  app.post("/v1/proofs", async (req: any, res) => {
+  app.post("/v1/proofs", limit("proof", 120, 60), async (req: any, res) => {
     try {
       const engine = await pgEngine(pool);
       const r = await engine.submitProof({ body: req.body, rawBody: req.rawBody ?? "", headers: req.headers, method: "POST", path: "/v1/proofs" });
@@ -254,7 +284,8 @@ export function createApp() {
     if (dup) return res.status(409).json({ error: "payment already used" });
     try { await reserveNonce(pool, pay); } catch (e: any) { if (e?.code === "23505") return res.status(409).json({ error: "payment already used (nonce)" }); throw e; }
     const s = await settlePayment(pay).catch((e: any) => ({ ok: false, error: "exception: " + String(e?.message ?? e).slice(0, 480) } as any));
-    if (!s.ok) { res.locals.error = "settlement failed: " + (s.error ?? "unknown"); return res.status(402).json({ error: "settlement failed; balance not credited", reason: s.error ?? "unknown" }); }
+    if (!s.ok) { res.locals.error = "settlement failed: " + (s.error ?? "unknown"); console.error("topup settle_failed", res.locals.adv, s.error);
+      return res.status(402).json({ error: "settlement_failed", message: "Payment settlement failed; balance not credited and you were not charged." }); }
     if (s.header) res.set("X-PAYMENT-RESPONSE", s.header);
     try {
       const c = await credit(res.locals.adv, amt, "topup_x402", { settle_tx: s.tx, payment_ref: pay.ref, payer: pay.payer, note: pay.mode,
@@ -284,6 +315,12 @@ function errorShape(): express.RequestHandler {
         const lead = !isCode && typeof error === "string" ? /(?:^|:\s)([a-z][a-z0-9]*_[a-z0-9_]+)(?::|$)/.exec(error)?.[1] : undefined;   // "tos_missing: ..." => tos_missing
         const c = isCode ? error : typeof code === "string" && CODE_RE.test(code) ? code : lead ?? ERROR_CODES[res.statusCode] ?? "error";
         const m = isCode ? String(message) : String(message ?? error ?? c);
+        if (res.statusCode >= 500) {   // never leak exception / SQL / RPC text: log it, send a generic body
+          console.error(`${res.statusCode} ${_req.method} ${_req.path}`, res.locals.request_id ?? "", m, Object.keys(rest).length ? JSON.stringify(rest).slice(0, 2000) : "");
+          res.locals.error = m;
+          const explicit = isCode ? error : typeof code === "string" && CODE_RE.test(code) ? code : null;   // a deliberate machine code is kept; message text never is
+          return json({ error: explicit ?? ERROR_CODES[res.statusCode] ?? "internal_error", message: "internal error", ...(rest.request_id ? { request_id: rest.request_id } : {}) });
+        }
         return json({ error: c, message: m, ...rest });
       }
       return json(body);

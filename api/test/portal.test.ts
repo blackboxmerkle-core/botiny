@@ -3,7 +3,7 @@ const TOSH = tosHashOf(DEFAULT_TOS.bot);
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-process.env.DASHBOARD_PASSWORD = "test-pass";
+process.env.DASHBOARD_PASSWORD = "Test-Pass-0123456789";
 delete process.env.PUBLIC_BASE_URL;
 import { createApp } from "../src/app";
 import { pool } from "../src/db";
@@ -16,7 +16,7 @@ import { runJob } from "../../crawler/src/jobs";
 import { _setResolver } from "../../crawler/src/suggest";
 
 const owner = privateKeyToAccount(generatePrivateKey()), other = privateKeyToAccount(generatePrivateKey()), stranger = privateKeyToAccount(generatePrivateKey());
-const AUTH = { authorization: "Basic " + Buffer.from("admin:test-pass").toString("base64") };
+const AUTH = { authorization: "Basic " + Buffer.from("admin:Test-Pass-0123456789").toString("base64") };
 const H = { "content-type": "application/json", ...AUTH };
 let base = "", host = "", server: any, n = 0, advKey = "", LID = "";
 before(async () => { await resetTestDb(); await ensureSources(); server = createApp().listen(0); const port = (server.address() as AddressInfo).port; base = `http://127.0.0.1:${port}`; host = `127.0.0.1:${port}`; });

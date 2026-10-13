@@ -2,26 +2,17 @@
 // host (DNS must resolve to public addresses only), upserts a crawl item (source 'suggestions', user-submitted),
 // probes x402 endpoints (one unpaid request), scores it and publishes when it clears the normal quality bar;
 // otherwise the suggestion goes to needs_review with what is missing.
-import { lookup } from "node:dns/promises";
-import { BlockList, isIP } from "node:net";
+import { resolvePublic, _setSafeFetchResolver } from "./safe-fetch";
 import { q } from "./db";
 import { upsertItem } from "./store";
 import { probeItem } from "./probe";
 import { scoreItem } from "./score";
 import { publish } from "./publish";
 import { normUrl, hostOf } from "./normalize";
-const PRIVATE = new BlockList();
-for (const [a, b] of [["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.168.0.0", 16], ["198.18.0.0", 15], ["224.0.0.0", 3]] as const) PRIVATE.addSubnet(a, b, "ipv4");
-for (const [a, b] of [["::", 127], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8]] as const) PRIVATE.addSubnet(a, b, "ipv6");
-type Resolver = (host: string) => Promise<string[]>;
-let resolver: Resolver = async h => (await lookup(h, { all: true })).map(x => x.address);
-export const _setResolver = (r: Resolver | null) => { resolver = r ?? (async h => (await lookup(h, { all: true })).map(x => x.address)); };
-export async function assertPublicHost(host: string) {
-  let addrs: string[] = [];
-  try { addrs = await resolver(host); } catch { throw Object.assign(new Error(`host ${host} does not resolve`), { review: true }); }
-  if (!addrs.length) throw Object.assign(new Error(`host ${host} does not resolve`), { review: true });
-  for (const raw of addrs) { const a = raw.toLowerCase().replace(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/, "$1"); if (/^::ffff:/.test(a) || PRIVATE.check(a, isIP(a) === 6 ? "ipv6" : "ipv4")) throw Object.assign(new Error(`host ${host} resolves to a non-public address`), { review: true }); }
-}
+/** Test hook: swap the DNS resolver (shared with safeFetch). */
+export const _setResolver = (r: ((host: string) => Promise<string[]>) | null) => _setSafeFetchResolver(r);
+/** Host must resolve to public addresses only: the shared SSRF guard (crawler/src/safe-fetch.ts) is the single source of truth. */
+export async function assertPublicHost(host: string) { await resolvePublic(host); }
 const TYPE: Record<string, "x402" | "mcp" | "agent" | "package" | "service"> = { x402_api: "x402", mcp_server: "mcp", agent: "agent", repo: "package", other: "service" };
 const upd = (id: string, state: string, detail: any, extra = "", p: any[] = []) =>
   q(`UPDATE listing_suggestions SET state=$2, detail=$3, updated_at=now()${extra} WHERE suggestion_id=$1`, [id, state, detail, ...p]);

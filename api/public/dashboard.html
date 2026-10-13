@@ -159,6 +159,7 @@ button.sm{background:#21262d;color:var(--fg);border:1px solid var(--line);paddin
 </section>
 </main>
 <script>
+{const _f=window.fetch.bind(window);window.fetch=(u,o={})=>{const h=new Headers(o.headers||{});h.set("X-Botiny-Client","dashboard");return _f(u,{...o,headers:h});};}  // CSRF header on every admin call
 const $=s=>document.querySelector(s), j=u=>fetch(u).then(r=>r.json());
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const usdc=a=>(Number(a||0)/1e6).toFixed(6), t=s=>s?new Date(s).toLocaleTimeString():"", d=s=>s?new Date(s).toLocaleString():"";

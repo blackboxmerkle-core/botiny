@@ -68,6 +68,9 @@ export function adminRouter() {
         init.headers["X-TOS-ACCEPT"] = (await (await import("./tos")).currentTos("bot")).sha256;
         r2 = await fetch(url, init);
       } else {
+        // Real payer signing inside the API process is OFF by default (security audit item 8): the API never needs a payer
+        // key. Use scripts/pay-recommend.ts (separate local process) instead, or opt in with ADMIN_TRY_PAYER_SIGNING=1.
+        if (process.env.ADMIN_TRY_PAYER_SIGNING !== "1") return res.status(503).json({ error: "try_search_signing_disabled", message: "Real-payment 'try a search' is disabled in the API process. Run scripts/pay-recommend.ts locally, or set ADMIN_TRY_PAYER_SIGNING=1 (not recommended)." });
         const raw = process.env.PAYER_PRIVATE_KEY;
         if (!raw) return res.status(503).json({ error: "PAYER_PRIVATE_KEY not configured on the server" });
         const { privateKeyToAccount } = await import("viem/accounts");

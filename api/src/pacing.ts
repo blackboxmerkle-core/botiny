@@ -30,7 +30,8 @@ export async function pacingAt(db: Q, M: number, nowMs: number, ids?: string[]):
   const now = BigInt(nowMs);
   for (const o of offers) {
     const L = led.get(o.listing_id) ?? {}; const g = (k: string) => L[k] ?? 0n;
-    const funded = g("funded"), draw = g("pool_draw"), returned = g("returned_unearned") + g("returned_clawback"), rev = g("expired_revenue");
+    // void_funded / void_draw: compensation for a settle_failed (unbilled) request: un-fund / give the draw back to the pool
+    const funded = g("funded") - g("void_funded"), draw = g("pool_draw") - g("void_draw"), returned = g("returned_unearned") + g("returned_clawback"), rev = g("expired_revenue");
     const consumed = funded + draw - returned, pool = returned - draw - rev;
     const start = BigInt(o.start), exp = o.exp ? BigInt(o.exp) : start + BigInt(DEFAULT_OFFER_DAYS * 86_400_000);
     const B = o.b == null ? null : BigInt(o.b);

@@ -1,1 +1,1 @@
-process.env.PAYMENT_MODE = "x402"; process.env.DASHBOARD_PASSWORD = "test-pass"; process.env.FACILITATOR_FALLBACK = "0"; process.env.RELAYER_PRIVATE_KEY = "0x" + "11".repeat(32); delete process.env.PAYER_PRIVATE_KEY;
+process.env.PAYMENT_MODE = "x402"; process.env.DASHBOARD_PASSWORD = "Test-Pass-0123456789"; process.env.FACILITATOR_FALLBACK = "0"; process.env.RELAYER_PRIVATE_KEY = "0x" + "11".repeat(32); delete process.env.PAYER_PRIVATE_KEY;

@@ -9,7 +9,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-process.env.DASHBOARD_PASSWORD = "test-pass";
+process.env.DASHBOARD_PASSWORD = "Test-Pass-0123456789";
 process.env.CS_CFG_minClickDelayMs = "0";
 import { createPublicClient, createWalletClient, http, keccak256, toBytes, type Hex } from "viem";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
@@ -19,7 +19,7 @@ import { resetTestDb } from "../src/seed";
 import { settleIncentives, clawbackClick } from "../src/clicks";
 import { attestTick, artifact, assertTestnet, campaignHash, clickHash, enqueue, SKALE_EUROPA_TESTNET } from "../src/attest";
 
-const AUTH = { authorization: "Basic " + Buffer.from("admin:test-pass").toString("base64") };
+const AUTH = { authorization: "Basic " + Buffer.from("admin:Test-Pass-0123456789").toString("base64") };
 const H = { "content-type": "application/json", ...AUTH };
 const DAY = 86_400_000;
 const anvilBin = [process.env.ANVIL_BIN, join(homedir(), ".foundry", "bin", "anvil"), "/usr/local/bin/anvil"].find(p => p && existsSync(p));

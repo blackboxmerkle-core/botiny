@@ -5,5 +5,15 @@
     "worker": "tsx --env-file=../api/.env src/worker.ts",
     "crawl": "tsx --env-file=../api/.env src/cli.ts",
     "test": "DATABASE_URL=postgres://bot:bot@localhost:5432/botrec_test PAYMENT_MODE=mock tsx --test --test-concurrency=1 test/*.test.ts"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15",
+    "@types/pg": "^8.15.6"
+  },
+  "overrides": {
+    "ws": "^8.22.0"
   }
 }

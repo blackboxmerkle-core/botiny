@@ -10,6 +10,7 @@ import { pool, q } from "../src/db";
 import { ensureSources } from "../src/sources";
 import { isAllowed } from "../src/http";
 import { decode402, probeItem } from "../src/probe";
+import { _safeFetchAllowForTests } from "../src/safe-fetch";
 import { upsertItem } from "../src/store";
 import { findNearDuplicates, decideDuplicate } from "../src/dedupe";
 import { scoreItem, rescoreAll } from "../src/score";
@@ -96,6 +97,9 @@ test("free 402 probe: one unpaid request, decodes challenge, never sends a payme
   const port = (srv.address() as AddressInfo).port;
   const ok = await upsertItem(item({ source_key: "probe-ok", keys: [`url:http://127.0.0.1:${port}/paid`], urls: { primary: `http://127.0.0.1:${port}/paid`, endpoint: `http://127.0.0.1:${port}/paid` }, pricing: { x402: { method: "POST" } } }));
   const blocked = await upsertItem(item({ source_key: "probe-blocked", keys: [`url:http://127.0.0.1:${port}/blocked`], urls: { primary: `http://127.0.0.1:${port}/blocked` } }));
+  const denied: any = await probeItem(ok.item_id);   // SSRF guard: loopback is refused by default
+  assert.match(String(denied.error), /^blocked: /); assert.equal(denied.http_status, null);
+  _safeFetchAllowForTests(["127.0.0.1"]);
   const r: any = await probeItem(ok.item_id);
   assert.equal(r.http_status, 402); assert.equal(r.ok_402, true); assert.equal(r.x402.payTo, "0xPAY"); assert.equal(r.x402.amount, "5000");
   const rb: any = await probeItem(blocked.item_id);
@@ -105,6 +109,7 @@ test("free 402 probe: one unpaid request, decodes challenge, never sends a payme
   for (const s of seen) { assert.ok(!s.headers["x-payment"] && !s.headers["payment-signature"]); assert.match(String(s.headers["user-agent"]), /botsource-crawler.*github\.com/); }
   const [it] = await q("SELECT pricing FROM crawl_items WHERE item_id=$1", [ok.item_id]);
   assert.equal(it.pricing.probe.ok_402, true);
+  _safeFetchAllowForTests([]);
   srv.close();
 });
 

@@ -14,6 +14,7 @@ import { advertiserByKey, balanceOf, setBid, setIncentive } from "./market";
 import { currentSettings } from "./settings";
 import { activeBans, clientIp } from "./bans";
 import { assertPublicHost } from "../../crawler/src/suggest";
+import { safeFetch } from "../../crawler/src/safe-fetch";
 
 const q = async (sql: string, p: any[] = []) => (await pool.query(sql, p)).rows;
 const err = (status: number, message: string, code?: string, field?: string) => Object.assign(new Error(message), { status, code, ...(field ? { field } : {}) });
@@ -211,7 +212,9 @@ async function defaultClaimCheck(method: string, s: any, host: string) {
   
   await assertPublicHost(host);
   const has = (j: any) => Array.isArray(j?.claims) && j.claims.some((c: any) => String(c?.token) === token && String(c?.wallet).toLowerCase() === wallet);
-  const getJson = async (u: string) => { const r = await fetch(u, { redirect: "error", signal: AbortSignal.timeout(8000), headers: { "user-agent": "botiny-claim-check/1" } }); if (!r.ok) throw new Error(`HTTP ${r.status} at ${u}`); return JSON.parse((await r.text()).slice(0, 65536)); };
+  // SSRF-safe: DNS vetted + pinned, redirects re-checked (max 3), 8s, 64 KiB cap
+  const getJson = async (u: string) => { const r = await safeFetch(u, { timeoutMs: 8000, maxBytes: 65536, maxRedirects: 3, headers: { "user-agent": "botiny-claim-check/1", accept: "application/json" } });
+    if (!r.ok) throw new Error(`HTTP ${r.status} at ${u}`); return r.json(); };
   if (method === "dns_txt") {
     const { resolveTxt } = await import("node:dns/promises");
     const recs = (await resolveTxt(`_botiny.${host}`).catch(() => [])).map(x => x.join(""));
@@ -370,7 +373,9 @@ export function portalRouter() {
     let sigOk = false; try { sigOk = await verifyMessage({ address: s.claim_wallet, message: claimChallenge(s), signature: req.body?.signature }); } catch {}
     if (!sigOk) throw err(401, "signature over the claim challenge does not match claim_wallet", "bad_signature");
     const host = new URL(s.url).hostname;
-    const chk = await claimChecker(method, s, host).catch((e: any) => ({ ok: false, error: String(e?.message ?? e).slice(0, 200) }));
+    const chk = await claimChecker(method, s, host).catch((e: any) => {   // user-facing: only our own diagnostic text, never raw socket/TLS/parser errors
+      const m = String(e?.message ?? e); console.error("claim check", String(req.params.id), m.slice(0, 300));
+      return { ok: false, error: e?.code === "blocked_address" || /^HTTP \d{3} at /.test(m) || /^response larger than/.test(m) ? m.slice(0, 200) : "could not fetch or parse the claim file" }; });
     const claim = { ...s.claim, method, status: chk.ok ? "verified" : "failed", error: chk.ok ? null : chk.error, checked_at: new Date().toISOString() };
     await q("UPDATE listing_suggestions SET claim=$2, updated_at=now() WHERE suggestion_id=$1", [s.suggestion_id, claim]);
     res.status(chk.ok ? 200 : 422).json({ id: s.suggestion_id, claim: { method, status: claim.status, error: claim.error, checked_at: claim.checked_at } });

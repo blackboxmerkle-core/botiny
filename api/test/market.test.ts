@@ -3,8 +3,8 @@ const TOSH = tosHashOf(DEFAULT_TOS.bot), TOSA = tosHashOf(DEFAULT_TOS.advertiser
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-process.env.DASHBOARD_PASSWORD = "test-pass";
-const AUTH = { authorization: "Basic " + Buffer.from("admin:test-pass").toString("base64") };
+process.env.DASHBOARD_PASSWORD = "Test-Pass-0123456789";
+const AUTH = { authorization: "Basic " + Buffer.from("admin:Test-Pass-0123456789").toString("base64") };
 import { createApp } from "../src/app";
 import { pool } from "../src/db";
 import { resetTestDb } from "../src/seed";

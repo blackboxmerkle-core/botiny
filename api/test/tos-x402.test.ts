@@ -44,7 +44,7 @@ test("402 lists one accept per gas-funded chain with ToS; paid call settles via 
   assert.ok(ix.every(i => i.db_txid === row.db_txid)); assert.equal(nn.length, 1);
   const rp = await (await fetch(`${base}/v1/requests/${body.request_id}/replay`)).json();
   assert.equal(rp.match, true); assert.equal(rp.tos.sha256, j.tos.sha256); assert.equal(rp.tos.proof.salt, p.paid && p.tos.salt);
-  const det = await (await fetch(`${base}/dashboard/api/requests/${body.request_id}`, { headers: { authorization: "Basic " + Buffer.from("admin:test-pass").toString("base64") } })).json();
+  const det = await (await fetch(`${base}/dashboard/api/requests/${body.request_id}`, { headers: { authorization: "Basic " + Buffer.from("admin:Test-Pass-0123456789").toString("base64") } })).json();
   assert.equal(det.tos_version, 1);
 });
 
