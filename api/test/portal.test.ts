@@ -308,3 +308,34 @@ test("advertiser wallet unlink: DELETE /v1/advertisers/me/link (key or session, 
   const aud = (await pool.query("SELECT actor, action FROM admin_audit WHERE action='advertiser_wallet_unlink' ORDER BY id")).rows;
   assert.equal(aud.length, 3); assert.match(aud[0].actor, /advertiser-session/); assert.match(aud[1].actor, /advertiser-key/);
 });
+
+test("dry_run/launch use the incremental commitment (budget - already consumed); report has pacing_status + pacing fields; promoted flag", async () => {
+  _resetRateLimits();
+  const k = (await admin("/api/admin/advertisers", { advertiser_id: "adv:incr", name: "I" })).api_key;
+  const L = (await fetch(base + "/v1/listings", { method: "POST", headers: H, body: JSON.stringify({ provider_id: "adv:incr", name: "Incr knitting archive", description: "Archive of knitting patterns", address: "https://incr.example.com/k", kind: "service" }) }).then(J)).listing_id;
+  await admin("/api/admin/advertisers/adv:incr/credit", { amount_atomic: 60_000 });
+  const body = { listing_id: L, bid_atomic: 0, incentive: { budget_atomic: 50_000, show_atomic: 0, click_atomic: 100 } };
+  const d0 = await post("/v1/advertisers/me/campaigns", { ...body, dry_run: true }, k);
+  assert.equal(d0.summary.incremental_commitment_atomic, 50_000); assert.equal(d0.summary.balance_after_atomic, 10_000); assert.equal(d0.summary.current_offer, null);
+  const l1 = await post("/v1/advertisers/me/campaigns", body, k); assert.equal(l1.status, 201);
+  assert.equal(l1.campaign.promoted, false, "bid 0 => no paid promotion"); assert.equal(l1.campaign.state, "active");
+  const balBefore = (await get("/v1/advertisers/me", k)).balance_atomic; assert.equal(balBefore, 60_000, "launch debits nothing up front");
+  // 30k of the budget is consumed (escrow funded); drain the balance so only the increment is affordable
+  await pool.query("INSERT INTO incentive_pool_ledger(listing_id, provider_id, kind, amount_atomic, note) VALUES ($1,'adv:incr','funded',30000,'test')", [L]);
+  await pool.query("INSERT INTO balance_ledger(advertiser_id,delta_atomic,kind,note) VALUES ('adv:incr',-30000,'admin_credit','test: escrow already debited')");
+  const same = await post("/v1/advertisers/me/campaigns", { ...body, dry_run: true }, k);
+  assert.equal(same.summary.already_committed_atomic, 30_000); assert.equal(same.summary.incremental_commitment_atomic, 20_000);
+  assert.equal(same.summary.balance_after_atomic, 10_000); assert.equal(same.summary.sufficient_balance, true); assert.equal(same.summary.current_offer.budget_atomic, 50_000);
+  const raise = await post("/v1/advertisers/me/campaigns", { ...body, incentive: { ...body.incentive, budget_atomic: 70_000 }, dry_run: true }, k);
+  assert.equal(raise.summary.incremental_commitment_atomic, 40_000); assert.equal(raise.summary.shortfall_atomic, 10_000); assert.equal(raise.summary.would_fail, "insufficient_balance");
+  // real re-launch with the same budget is NOT blocked by double counting (balance 30k < full 50k budget, >= 20k increment)
+  assert.equal((await post("/v1/advertisers/me/campaigns", body, k)).status, 201);
+  assert.equal((await post("/v1/advertisers/me/campaigns", { ...body, incentive: { ...body.incentive, budget_atomic: 70_000 } }, k)).error, "insufficient_balance");
+  assert.equal((await get("/v1/advertisers/me", k)).balance_atomic, 30_000, "edits debit nothing");
+  const rep = await get("/v1/advertisers/me/incentives/report", k); const o = rep.offers.find((x: any) => x.listing_id === L);
+  assert.equal(o.pacing_status, o.pacing.status);
+  for (const f of ["status", "t_ppm", "lag_ppm", "boost_ppm", "budget_atomic", "consumed", "remaining", "pool", "offer_seq", "start_ms", "expires_ms"]) assert.ok(f in o.pacing, f);
+  assert.equal(o.pacing.consumed, 30_000); assert.equal(o.pacing.remaining, 20_000);
+  const csv = await fetch(base + "/v1/advertisers/me/incentives/report?format=csv", { headers: { authorization: "Bearer " + k } }).then(r => r.text());
+  assert.ok(csv.split("\n").some(l => l.startsWith(L + ",") && l.endsWith("," + o.pacing_status)), "CSV pacing_status matches JSON");
+});

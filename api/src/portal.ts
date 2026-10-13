@@ -512,7 +512,7 @@ async function campaignRows(adv: string, only?: string) {
     const has = l.bid_atomic > 0 || !!l.offer;
     const state = !has ? "none" : p?.status === "expired" && l.bid_atomic === 0 ? "expired" : l.paused ? "paused" : balance < cost ? "paused_no_balance" : "active";
     return { campaign_id: l.listing_id, listing_id: l.listing_id, name: l.name, kind: l.kind, address: l.address, state,
-      bid_atomic: l.bid_atomic, paused: l.paused, impression_cost_atomic: cost, base_price_atomic: settings.fixed_cpi_atomic,
+      bid_atomic: l.bid_atomic, paused: l.paused, promoted: l.bid_atomic > 0 && !l.paused, impression_cost_atomic: cost, base_price_atomic: settings.fixed_cpi_atomic,
       incentive: l.offer ? { show_atomic: l.offer.show_atomic, click_atomic: l.offer.click_atomic, budget_atomic: l.offer.budget_atomic == null ? null : Number(l.offer.budget_atomic), expires_at: l.offer.expires_at } : null,
       pacing: p,   // exactly src/pacing.ts Pacing (status, t_ppm, lag_ppm, boost_ppm [additive ppm], budget_atomic, consumed, remaining, pool, ...)
       consumed_pct: p?.budget_atomic ? Math.round(p.consumed * 10000 / p.budget_atomic) / 100 : null,
@@ -575,12 +575,23 @@ export async function createCampaign(adv: string, b: any) {
   if (inc != null && typeof inc !== "object") throw err(400, "incentive must be an object", "validation", "incentive");
   const days = inc?.expires_at ? Math.max((+new Date(inc.expires_at) - Date.now()) / 86_400_000, 0) : 30;
   const budget = inc?.budget_atomic ?? null, cost = settings.fixed_cpi_atomic + bid, balance = await balanceOf(pool, adv);
+  // Incremental commitment: incentive budgets are not debited up front. Escrow is debited per issued link (pool first),
+  // and pacing.ts measures `consumed` for the listing across its offers against the latest budget. So a new or raised
+  // budget only commits (new budget - already consumed). Re-submitting the same budget commits nothing extra.
+  const { pacingAt } = await import("./pacing");
+  const M = Number((await q("SELECT last_value::text v FROM market_seq"))[0].v);
+  const curP = (await pacingAt(pool, M, Date.now(), [lid])).get(lid) ?? null;
+  const already = curP ? Math.max(curP.consumed, 0) : 0;
+  const incremental = budget != null ? Math.max(budget - already, 0) : 0;
   const summary = { impression_cost_atomic: cost, base_price_atomic: settings.fixed_cpi_atomic, bid_atomic: bid, pool_atomic: budget, expires_in_days: Math.round(days * 100) / 100,
     daily_pacing_target_atomic: budget != null && days > 0 ? Math.round(budget / days) : null,
     max_clicks: budget != null && inc?.click_atomic ? Math.floor(budget / (inc.click_atomic + (inc.show_atomic ?? 0))) : null,
-    balance_before_atomic: balance, balance_after_atomic: Math.max(balance - (budget ?? 0), 0),
-    required_atomic: Math.max(cost, budget ?? 0), sufficient_balance: balance >= Math.max(cost, budget ?? 0), shortfall_atomic: Math.max(Math.max(cost, budget ?? 0) - balance, 0),
-    would_fail: balance >= Math.max(cost, budget ?? 0) ? null : "insufficient_balance", rules: ["promoted results are labelled and count toward the 2-of-10 provider cap", "no refunds"] };
+    current_offer: curP ? { offer_seq: curP.offer_seq, budget_atomic: curP.budget_atomic, consumed_atomic: already, pacing_status: curP.status } : null,
+    already_committed_atomic: already, incremental_commitment_atomic: incremental,
+    balance_before_atomic: balance, balance_after_atomic: Math.max(balance - incremental, 0),
+    required_atomic: Math.max(cost, incremental), sufficient_balance: balance >= Math.max(cost, incremental), shortfall_atomic: Math.max(Math.max(cost, incremental) - balance, 0),
+    would_fail: balance >= Math.max(cost, incremental) ? null : "insufficient_balance",
+    debit_model: "nothing is debited at launch; escrow is debited per issued result link (pool first) up to the budget", rules: ["promoted results are labelled and count toward the 2-of-10 provider cap", "no refunds"] };
   for (const k of ["budget_atomic", "show_atomic", "click_atomic"] as const) { const v = inc?.[k]; if (v != null && (!Number.isSafeInteger(v) || v < 0 || (k === "budget_atomic" && v <= 0))) throw err(400, `incentive.${k} must be a non-negative integer${k === "budget_atomic" ? " > 0" : ""}`, "validation", "incentive." + k); }
   if (inc?.expires_at != null && isNaN(+new Date(inc.expires_at))) throw err(400, "incentive.expires_at must be an ISO time", "validation", "incentive.expires_at");
   if (b.dry_run) return { status: 200, body: { state: "draft", listing_id: lid, summary } };

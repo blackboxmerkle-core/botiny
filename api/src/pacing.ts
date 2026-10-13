@@ -82,7 +82,10 @@ export async function incentiveReport(db: Q, adv: string | null, nowMs = Date.no
       legacy_refunded_atomic: Number(legacy.get(p.listing_id)?.amt ?? 0),
       consumed_atomic: p.consumed, consumed_pct: p.budget_atomic ? Math.round((p.consumed * 10000) / p.budget_atomic) / 100 : null,
       remaining_atomic: p.remaining, starts_at: new Date(p.start_ms).toISOString(), expires_at: new Date(p.expires_ms).toISOString(),
-      pacing: { status: p.status, lag_ppm: p.lag_ppm, boost_ppm: p.boost_ppm, time_elapsed_ppm: p.t_ppm } };
+      pacing_status: p.status,
+      pacing: { status: p.status, t_ppm: p.t_ppm, time_elapsed_ppm: p.t_ppm, lag_ppm: p.lag_ppm, boost_ppm: p.boost_ppm, budget_atomic: p.budget_atomic, consumed: p.consumed,
+        remaining: p.remaining, pool: p.pool, funded: p.funded, pool_draw: p.pool_draw, returned: p.returned, expired_revenue: p.expired_revenue,
+        offer_seq: p.offer_seq, start_ms: p.start_ms, expires_ms: p.expires_ms, show_atomic: p.show_atomic, click_atomic: p.click_atomic } };
   });
   const timeline = (await db.query(`
     WITH ev AS (
