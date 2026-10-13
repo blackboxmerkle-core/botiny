@@ -38,3 +38,16 @@ classes, v4-mapped, 198.18 policy, pinning, redirect re-check, hop and size caps
 (per-IP, per-wallet before payment, click), admin lockout and CSRF, 5xx no-leak, relayer-vs-payer without a payer key.
 The crawler probe test now asserts loopback is refused by default. Totals: api 85/85, click-server 45/45,
 crawler 10/10, contracts 8/8.
+
+## Re-check follow-ups on 8135b04
+
+| # | Fix | Tests |
+|---|-----|-------|
+| A | `SAFE_FETCH_ALLOW_CIDRS` entries are parsed as v4/v6 ranges. Any entry that **overlaps** a blocked range (loopback, RFC1918, CGNAT, link-local/metadata, ULA, multicast, `::/0`, `::ffff:0:0/96`, and the rest) is rejected and logged. Only entries fully inside an explicitly re-enableable range are accepted, and today that is just `198.18.0.0/15`. So `126.0.0.0/7`, `169.0.0.0/8`, `::/0` and `0.0.0.0/0` are all refused. | `security-recheck` A, plus 20 bad and 3 good CIDRs |
+| B | The allow-list is honoured only when `NODE_ENV` is `development` or `test`, or with `BOTINY_BOX_DEV=1`. Otherwise it is ignored with an error log. A loud startup WARNING is printed by the API server and the crawler worker when it is active. The box sets `BOTINY_BOX_DEV=1` in `api/.env`. **Production must set neither `BOTINY_BOX_DEV` nor `SAFE_FETCH_ALLOW_CIDRS`.** | B |
+| C | Ambiguous settle errors (timeout, network, a tx hash without a receipt, or an unclassified error) set `settle_unknown`, return HTTP 202 and stay billed. Only definite rejections (reverted, invalid signature/params, insufficient funds, expired, nonce already used, and similar) become `settle_failed`. The reconciler (`api/src/reconcile.ts`) checks EIP-3009 `authorizationState(from, nonce)`. If it reads *used*, the request becomes `settled`. If it reads *unused* and `validBefore` has passed (with a 60 s grace, or 30 min when validBefore is unknown), the request becomes `settle_failed` and is compensated. Ambiguous top-ups go to `topup_pending` and are credited idempotently only once the nonce is proven used. Migration `0008_settle_unknown.sql`. | C+D, top-up |
+| D | A definite failure writes its compensation in the **same transaction** as the `settle_failed` update, under ledger locks. The crawler worker runs `sweep()` every `SETTLE_SWEEP_MS` (60 s). The sweep resolves `settle_unknown` rows, compensates any `billed` + `settle_failed` leftovers (idempotent) and resolves pending top-ups. | C+D (a sweep that runs twice compensates once) |
+| E | On a redirect to a different host or scheme, safe-fetch keeps only `user-agent`, `accept`, `accept-language` and `accept-encoding`. Authorization, Cookie and all custom headers are dropped. Same-host hops keep them. | E |
+| F | The rate-limit exemption applies only when the TCP **socket** peer is loopback AND there is no `X-Forwarded-For` header. ngrok traffic always carries XFF, so it is limited by the forwarded client IP, even when it claims `127.0.0.1`. | F |
+
+Live: backup `botrec-pre-settle-unknown-0008-20261013-221726.dump` (0600) was taken first, then 0008 was applied. Replay is 534/534 MATCH. External :8402 is refused. The dashboard works via ngrok (401 basic-auth). Both processes log the allow-list warning, and the sweeper runs without errors.

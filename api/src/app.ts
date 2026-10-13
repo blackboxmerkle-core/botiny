@@ -17,7 +17,7 @@ import { currentSettings } from "./settings";
 import { MARKET_LOCK, marketSeq, assertNonNegative, advertiserByKey, advertiserSummary, setBid, setIncentive, credit } from "./market";
 import { portalRouter, suggestionsAdminRouter, sessionAdvertiser, sessionOf, listCampaigns, listingStats, createCampaign, rateLimit } from "./portal";
 import { payerFromHeader } from "./bans";
-import { voidUnbilledRequest } from "./compensate";
+import { recordSettlement } from "./reconcile";
 import { issueClickLinks, pgEngine, scoreClick, settleIncentives, clawbackClick, clearReview, earnings, clickKeys } from "./clicks";
 
 export const botId = (req: express.Request) => { const b = req.get("X-Bot-Id"); return b && /^[A-Za-z0-9._:-]{1,64}$/.test(b) ? b : null; };
@@ -31,7 +31,10 @@ export const redactPayer = (p: string | null) => !p ? null : /^0x[0-9a-fA-F]{40}
 export function limit(name: string, perIpMin: number, perWalletMin?: number): express.RequestHandler {
   return (req, res, next) => {
     const ip = clientIp(req);
-    if (process.env.RL_EXEMPT_LOOPBACK !== "0" && /^(127\.|::1$)/.test(ip) && !req.get("x-forwarded-for")) return next();
+    // exempt ONLY a direct local client: the TCP peer itself is loopback AND no X-Forwarded-For (ngrok always adds one,
+    // so tunnelled traffic is limited by its forwarded client IP)
+    const peer = String(req.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
+    if (process.env.RL_EXEMPT_LOOPBACK !== "0" && /^(127\.|::1$)/.test(peer) && req.get("x-forwarded-for") == null) return next();
     const N = name.toUpperCase();
     try {
       rateLimit(`${name}:ip:${ip}`, Number(process.env[`RL_${N}_IP`] ?? perIpMin), 60_000);
@@ -138,15 +141,17 @@ export function createApp() {
       return res.status(500).json({ error: "internal_error", message: "internal error", request_id });
     } finally { client.release(); }
 
-    const s = await settlePayment(pay).catch((e: any) => ({ ok: false, error: "exception: " + String(e?.shortMessage ?? e?.message ?? e).slice(0, 480) } as any));
-    await pool.query("UPDATE requests SET payment_status=$2, settle_tx=$3, settle_error=$4, settle_via=$5 WHERE request_id=$1",
-      [request_id, s.ok ? "settled" : "settle_failed", s.tx ?? null, s.ok ? null : (s.error ?? "unknown"), s.via ?? pay.settle_via]);
+    // a thrown settle is AMBIGUOUS (the authorization may have been broadcast): settle_unknown, reconciled on-chain later
+    const s = await settlePayment(pay).catch((e: any) => ({ ok: false, ambiguous: true, via: pay.settle_via, error: "exception: " + String(e?.shortMessage ?? e?.message ?? e).slice(0, 480) } as any));
+    const vb = pay.mode === "x402" ? Number((pay as any).payload?.payload?.authorization?.validBefore ?? 0) || null : null;
+    // outcome + (definite failure) compensation in ONE transaction; the worker sweeper covers anything left behind
+    const rec = await recordSettlement(request_id, s, { via: pay.settle_via, valid_before: vb }).catch((e: any) => { console.error("record settlement", request_id, e?.stack ?? e); return null; });
     if (!s.ok) {
-      res.locals.error = "settlement failed: " + (s.error ?? "unknown");   // full RPC/facilitator text: server-side log + admin dashboard only
-      console.error("settle_failed", request_id, s.error);
-      // not billed: reverse impression debits + click escrow and void the links in a follow-up transaction (see compensate.ts)
-      const v = await voidUnbilledRequest(request_id).catch((e: any) => { console.error("void", request_id, e?.stack ?? e); return null; });
-      return res.status(402).json({ error: "settlement_failed", message: "Payment settlement failed; you were not charged and this request was not billed.", request_id, billed: false, voided: !!v?.voided });
+      res.locals.error = "settlement " + (s.ambiguous ? "unknown" : "failed") + ": " + (s.error ?? "unknown");   // full text: server log + admin dashboard only
+      console.error(s.ambiguous ? "settle_unknown" : "settle_failed", request_id, s.error);
+      if (s.ambiguous) return res.status(202).json({ state: "settle_unknown", request_id, billed: "pending",
+        message: "Payment settlement outcome is unknown and is being reconciled on-chain. Check GET /v1/requests/" + request_id + " (payment_status). If the payment did not settle you are not charged." });
+      return res.status(402).json({ error: "settlement_failed", message: "Payment settlement failed; you were not charged and this request was not billed.", request_id, billed: false, voided: !!rec?.compensation?.voided });
     }
     if (s.header) res.set("X-PAYMENT-RESPONSE", s.header);
     res.json({ request_id, response_hash: out.hash, response: out.body, click_links, payment: { network: pay.network, settle_tx: s.tx ?? null, settle_via: s.via }, tos: { version: tos.tos_version, sha256: tos.tos_hash, proof: tos.proof } });
@@ -283,7 +288,15 @@ export function createApp() {
     const dup = (await pool.query("SELECT 1 FROM balance_ledger WHERE payment_ref=$1", [pay.ref])).rows.length;
     if (dup) return res.status(409).json({ error: "payment already used" });
     try { await reserveNonce(pool, pay); } catch (e: any) { if (e?.code === "23505") return res.status(409).json({ error: "payment already used (nonce)" }); throw e; }
-    const s = await settlePayment(pay).catch((e: any) => ({ ok: false, error: "exception: " + String(e?.message ?? e).slice(0, 480) } as any));
+    const s = await settlePayment(pay).catch((e: any) => ({ ok: false, ambiguous: true, error: "exception: " + String(e?.message ?? e).slice(0, 480) } as any));
+    if (!s.ok && s.ambiguous) {   // may have settled: never credit blindly; the sweeper credits once authorizationState proves it
+      console.error("topup settle_unknown", res.locals.adv, s.error);
+      await pool.query(`INSERT INTO topup_pending(payment_ref,advertiser_id,amount_atomic,chain_id,payer,nonce,valid_before,mode,settle_tx,settle_via,credit_meta,last_error)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (payment_ref) DO NOTHING`,
+        [pay.ref, res.locals.adv, amt, pay.chainId ?? null, pay.payer, (pay as any).nonce ?? null, Number((pay as any).payload?.payload?.authorization?.validBefore ?? 0) || null, pay.mode, s.tx ?? null, s.via ?? null,
+         { payer: pay.payer, note: pay.mode, payment_network: pay.network, payment_chain_id: pay.chainId, settle_via: s.via, tos_version: tos.tos_version, tos_hash: tos.tos_hash, tos_proof: tos.proof, pay_to: pay.payTo }, String(s.error ?? "").slice(0, 300)]);
+      return res.status(202).json({ state: "settle_unknown", message: "Payment settlement outcome is unknown; it is being reconciled on-chain and your balance is credited automatically if it settled." });
+    }
     if (!s.ok) { res.locals.error = "settlement failed: " + (s.error ?? "unknown"); console.error("topup settle_failed", res.locals.adv, s.error);
       return res.status(402).json({ error: "settlement_failed", message: "Payment settlement failed; balance not credited and you were not charged." }); }
     if (s.header) res.set("X-PAYMENT-RESPONSE", s.header);

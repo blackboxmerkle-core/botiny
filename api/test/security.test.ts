@@ -51,8 +51,9 @@ test("safe-fetch: address classes, v4-mapped, 198.18/15 policy, redirects re-che
     "::1", "::", "fe80::1", "fc00::1", "fd00:ec2::254", "ff02::1", "::ffff:127.0.0.1", "::ffff:7f00:1", "::ffff:10.0.0.1", "64:ff9b::a00:1", "2002:a00:1::1"]) assert.equal(isPublicIp(a), false, a);
   for (const a of ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111", "::ffff:8.8.8.8"]) assert.equal(isPublicIp(a), true, a);
   assert.equal(canonicalIp("::ffff:7f00:1"), "127.0.0.1");
-  process.env.SAFE_FETCH_ALLOW_CIDRS = "198.18.0.0/15,127.0.0.0/8"; assert.equal(isPublicIp("198.18.0.1"), true, "box egress fake-IP range can be allowed explicitly");
-  assert.equal(isPublicIp("127.0.0.1"), false, "loopback can never be allowed via env"); delete process.env.SAFE_FETCH_ALLOW_CIDRS;
+  process.env.SAFE_FETCH_ALLOW_CIDRS = "198.18.0.0/15,127.0.0.0/8"; process.env.BOTINY_BOX_DEV = "1";
+  assert.equal(isPublicIp("198.18.0.1"), true, "box egress fake-IP range can be allowed explicitly");
+  assert.equal(isPublicIp("127.0.0.1"), false, "loopback can never be allowed via env"); delete process.env.SAFE_FETCH_ALLOW_CIDRS; delete process.env.BOTINY_BOX_DEV;
   _setSafeFetchResolver(async h => h === "mixed.test" ? ["8.8.8.8", "10.0.0.1"] : h === "fixture.test" ? ["127.0.0.1"] : ["93.184.216.34"]);
   await assert.rejects(resolvePublic("mixed.test"), /non-public/, "any private answer => refused (anti-rebinding)");
   await assert.rejects(safeFetch("http://localhost:1/"), /not allowed/);

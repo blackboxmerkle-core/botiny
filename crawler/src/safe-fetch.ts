@@ -24,16 +24,66 @@ for (const [a, b] of V4) BLOCK.addSubnet(a, b, "ipv4");
 for (const [a, b] of V6) BLOCK.addSubnet(a, b, "ipv6");
 // Metadata endpoints not covered above (e.g. AWS IPv6 IMDS fd00:ec2::254 is in fc00::/7; GCP/Azure/AWS v4 are 169.254.169.254).
 
+// ---- allow-list (SAFE_FETCH_ALLOW_CIDRS) -------------------------------------------------------------------------
+// Only these blocked ranges may ever be re-enabled. An entry is accepted only if it does NOT overlap any other blocked
+// range (so 126.0.0.0/7 -> overlaps 127/8, 169.0.0.0/8 -> overlaps 169.254/16, ::/0 -> overlaps everything: all refused).
+// Honoured only when NODE_ENV is development|test or BOTINY_BOX_DEV=1. PRODUCTION MUST NOT SET IT.
+export const RE_ENABLEABLE: [string, number][] = [["198.18.0.0", 15]];
+const v4n = (a: string) => a.split(".").reduce((x, o) => (x << 8n) + BigInt(Number(o)), 0n);
+function v6n(a: string) {
+  let s = a.toLowerCase();
+  const m = /(\d+\.\d+\.\d+\.\d+)$/.exec(s);
+  if (m) { const n = v4n(m[1]); s = s.slice(0, -m[1].length) + (n >> 16n).toString(16) + ":" + (n & 0xffffn).toString(16); }
+  const [h, t] = s.includes("::") ? s.split("::") : [s, null];
+  const hp = h ? h.split(":") : [], tp = t ? t.split(":") : [];
+  const parts = t === null ? hp : [...hp, ...Array(8 - hp.length - tp.length).fill("0"), ...tp];
+  return parts.reduce((x, g) => (x << 16n) + BigInt(parseInt(g || "0", 16)), 0n);
+}
+type Range = { fam: 4 | 6; lo: bigint; hi: bigint };
+export function cidrRange(cidr: string): Range | null {
+  const [a, b] = cidr.trim().split("/"); const fam = isIP(a); if (!fam) return null;
+  const bits = fam === 4 ? 32 : 128, len = b == null ? bits : Number(b);
+  if (!Number.isInteger(len) || len < 0 || len > bits || (b != null && !/^\d+$/.test(b))) return null;
+  const n = fam === 4 ? v4n(a) : v6n(a), host = (1n << BigInt(bits - len)) - 1n, lo = n & ~host & ((1n << BigInt(bits)) - 1n);
+  return { fam: fam as 4 | 6, lo, hi: lo | host };
+}
+const overlaps = (x: Range, y: Range) => x.fam === y.fam && x.lo <= y.hi && y.lo <= x.hi;
+// IPv6 view of IPv4 blocks too (v4-mapped ::ffff:0:0/96 is refused outright, so mapping a v6 entry onto it is an overlap)
+const BLOCKED_RANGES: { r: Range; cidr: string; ok: boolean }[] = [
+  ...V4.map(([a, b]) => ({ r: cidrRange(`${a}/${b}`)!, cidr: `${a}/${b}`, ok: RE_ENABLEABLE.some(([x, y]) => x === a && y === b) })),
+  ...V6.map(([a, b]) => ({ r: cidrRange(`${a}/${b}`)!, cidr: `${a}/${b}`, ok: false })),
+  { r: cidrRange("::ffff:0:0/96")!, cidr: "::ffff:0:0/96", ok: false },
+];
+/** Validate one allow-list entry: null if acceptable, else the reason it is refused. */
+export function allowEntryError(cidr: string): string | null {
+  const r = cidrRange(cidr); if (!r) return "not a valid CIDR";
+  const hit = BLOCKED_RANGES.find(b => !b.ok && overlaps(r, b.r));
+  if (hit) return `overlaps blocked range ${hit.cidr}`;
+  if (!BLOCKED_RANGES.some(b => b.ok && r.lo >= b.r.lo && r.hi <= b.r.hi && r.fam === b.r.fam)) return "not inside a re-enableable range (" + RE_ENABLEABLE.map(([a, b]) => `${a}/${b}`).join(", ") + ")";
+  return null;
+}
+export const allowListActive = (env = process.env) => !!env.SAFE_FETCH_ALLOW_CIDRS?.trim() && (env.NODE_ENV === "development" || env.NODE_ENV === "test" || env.BOTINY_BOX_DEV === "1");
+let cached: { key: string; list: BlockList } | null = null;
 function allowList() {
+  const raw = process.env.SAFE_FETCH_ALLOW_CIDRS ?? "";
+  const key = raw + "|" + allowListActive();
+  if (cached?.key === key) return cached.list;
   const l = new BlockList();
-  for (const c of (process.env.SAFE_FETCH_ALLOW_CIDRS ?? "").split(",").map(s => s.trim()).filter(Boolean)) {
-    const [a, b] = c.split("/"); const fam = isIP(a) === 6 ? "ipv6" : "ipv4";
-    // never allow loopback/link-local/metadata, whatever the env says
-    if (fam === "ipv4" && (a.startsWith("127.") || a.startsWith("169.254.") || a.startsWith("0."))) continue;
-    if (isIP(a)) l.addSubnet(a, Number(b ?? (fam === "ipv6" ? 128 : 32)), fam);
+  if (raw.trim() && !allowListActive()) console.error("[safe-fetch] SAFE_FETCH_ALLOW_CIDRS is set but IGNORED (needs NODE_ENV=development|test or BOTINY_BOX_DEV=1). Production must not set it.");
+  else if (raw.trim()) {
+    const ok: string[] = [];
+    for (const c of raw.split(",").map(s => s.trim()).filter(Boolean)) {
+      const e = allowEntryError(c);
+      if (e) { console.error(`[safe-fetch] REJECTED allow-list entry ${c}: ${e}`); continue; }
+      const [a, b] = c.split("/"); const fam = isIP(a) === 6 ? "ipv6" : "ipv4"; l.addSubnet(a, Number(b ?? (fam === "ipv6" ? 128 : 32)), fam); ok.push(c);
+    }
+    if (ok.length) console.warn(`\n[safe-fetch] !!! WARNING: SSRF allow-list ACTIVE (${ok.join(", ")}) — dev/box only (BOTINY_BOX_DEV/NODE_ENV). PRODUCTION MUST NOT SET SAFE_FETCH_ALLOW_CIDRS. !!!\n`);
   }
+  cached = { key, list: l };
   return l;
 }
+/** Startup hook: evaluate (and loudly log) the allow-list once at process start. */
+export const announceAllowList = () => { allowList(); return allowListActive(); };
 
 export class BlockedAddressError extends Error { code = "blocked_address"; review = true; constructor(m: string) { super(m); } }
 
@@ -90,18 +140,23 @@ export interface SafeResponse { status: number; ok: boolean; url: string; header
 export interface SafeFetchOpts { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number; maxBytes?: number; maxRedirects?: number; followRedirects?: boolean; truncate?: boolean }
 
 const REDIRECT = new Set([301, 302, 303, 307, 308]);
+/** Headers kept on a cross-host redirect; Authorization, Cookie, Proxy-Authorization and all custom headers are dropped. */
+export const SAFE_ACROSS_HOSTS = new Set(["user-agent", "accept", "accept-language", "accept-encoding"]);
 /** SSRF-safe fetch: see file header. Throws BlockedAddressError for disallowed targets (any hop). */
 export async function safeFetch(url: string, o: SafeFetchOpts = {}): Promise<SafeResponse> {
   const deadline = Date.now() + (o.timeoutMs ?? 10_000), maxBytes = o.maxBytes ?? 1_000_000, maxHops = o.maxRedirects ?? 5;
-  let cur = new URL(url), method = (o.method ?? "GET").toUpperCase(), body = o.body, hops = 0;
+  let cur = new URL(url), method = (o.method ?? "GET").toUpperCase(), body = o.body, hops = 0, headers: Record<string, string> = { ...(o.headers ?? {}) };
   for (;;) {
     const { address, family } = await assertSafeUrl(cur);
     const left = deadline - Date.now(); if (left <= 0) throw Object.assign(new Error("timeout"), { code: "timeout" });
-    const r = await once(cur, address, family, method, { ...(o.headers ?? {}) }, body, left, maxBytes, o.truncate ?? false);
+    const r = await once(cur, address, family, method, headers, body, left, maxBytes, o.truncate ?? false);
     if (REDIRECT.has(r.status) && r.headers.location && (o.followRedirects ?? true)) {
       if (++hops > maxHops) throw Object.assign(new Error(`too many redirects (> ${maxHops})`), { code: "too_many_redirects" });
-      cur = new URL(r.headers.location, cur);
-      if (r.status === 303 || ((r.status === 301 || r.status === 302) && method === "POST")) { method = "GET"; body = undefined; }
+      const next = new URL(r.headers.location, cur);
+      // cross-origin hop: drop credentials and every caller-supplied header except a small safe set
+      if (next.host !== cur.host || next.protocol !== cur.protocol) headers = Object.fromEntries(Object.entries(headers).filter(([k]) => SAFE_ACROSS_HOSTS.has(k.toLowerCase())));
+      cur = next;
+      if (r.status === 303 || ((r.status === 301 || r.status === 302) && method === "POST")) { method = "GET"; body = undefined; headers = Object.fromEntries(Object.entries(headers).filter(([k]) => k.toLowerCase() !== "content-type")); }
       continue;
     }
     return { ...r, url: cur.toString(), redirects: hops };

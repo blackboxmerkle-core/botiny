@@ -66,15 +66,20 @@ export async function reserveNonce(c: { query: (s: string, p?: any[]) => Promise
   if (p.mode !== "x402") return;
   await c.query("INSERT INTO payment_nonces(chain_id,payer,nonce,payment_ref) VALUES ($1,$2,$3,$4)", [p.chainId, p.payer, p.nonce, p.ref]);
 }
-export async function settlePayment(p: Verified): Promise<{ ok: boolean; tx?: string; header?: string; error?: string; via: string }> {
-  if (p.mode === "mock") return process.env.MOCK_SETTLE_FAIL === "1" ? { ok: false, error: "mock_settle_failure", via: "mock" } : { ok: true, tx: "mock", via: "mock" };
+export type SettleResult = { ok: boolean; tx?: string; header?: string; error?: string; via: string; ambiguous?: boolean };
+/** ok => settled; !ok && ambiguous => settle_unknown (reconciled on-chain later); !ok && !ambiguous => definite failure. */
+export async function settlePayment(p: Verified): Promise<SettleResult> {
+  if (p.mode === "mock") return process.env.MOCK_SETTLE_UNKNOWN === "1" ? { ok: false, error: "mock_settle_timeout", via: "mock", ambiguous: true }
+    : process.env.MOCK_SETTLE_FAIL === "1" ? { ok: false, error: "mock_settle_failure", via: "mock" } : { ok: true, tx: "mock", via: "mock" };
   if (p.settle_via === "facilitator-fallback") {
     // TEMPORARY: relayer unfunded on Base Sepolia -> x402.org facilitator settles. Verification above was still ours.
     const { useFacilitator } = await import("x402/verify");
     const reqs = { ...p.accept, payTo: p.payTo, extra: { name: p.accept.extra.name, version: p.accept.extra.version } };
     const s = await useFacilitator({ url: FALLBACK_URL as `${string}://${string}` }).settle({ ...p.payload, network: p.network } as any, reqs as any);
     return { ok: s.success, tx: s.transaction || undefined, via: "facilitator-fallback", header: Buffer.from(JSON.stringify({ ...s, settledBy: "x402.org-fallback" })).toString("base64"),
-      error: s.success ? undefined : "fallback facilitator: " + String((s as any).errorReason ?? (s as any).error ?? "unknown").slice(0, 400) };
+      error: s.success ? undefined : "fallback facilitator: " + String((s as any).errorReason ?? (s as any).error ?? "unknown").slice(0, 400),
+      // an explicit facilitator rejection reason is definite; no reason / unexpected / a tx hash without success is ambiguous
+      ambiguous: !s.success && (!!s.transaction || !(s as any).errorReason || /unexpected|timeout|unknown|network/i.test(String((s as any).errorReason))) };
   }
   const s = await settleExact(p.payload!, p.chain!);
   return { ...s, via: "self", header: Buffer.from(JSON.stringify({ success: s.ok, transaction: s.tx ?? "", network: p.network, payer: p.payer, settledBy: "self" })).toString("base64") };

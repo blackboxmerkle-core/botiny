@@ -14,46 +14,55 @@
 // carry a later market_seq than any request already pinned, so replay of every logged request is unchanged.
 // If any incentive line of the request already accrued (should be impossible: the bot never received the links on
 // a 402), nothing is reversed and the request is flagged billing_status='void_review' for an admin.
+import type { PoolClient } from "pg";
 import { pool } from "./db";
 import { MARKET_LOCK } from "./market";
 import { CLICK_LEDGER_LOCK } from "./clicks";
 
+/** Lock order used by everything that writes the market/click ledgers. */
+export async function lockLedgers(c: PoolClient) {
+  await c.query("SELECT pg_advisory_xact_lock($1)", [MARKET_LOCK]);
+  await c.query("SELECT pg_advisory_xact_lock($1)", [CLICK_LEDGER_LOCK]);
+}
+/** Compensate INSIDE the caller's transaction (ledger locks already held). Idempotent via billing_status + unique indexes. */
+export async function compensateInTx(c: PoolClient, request_id: string, reason = "settle_failed") {
+  const r = (await c.query("SELECT request_id, payment_status, billing_status FROM requests WHERE request_id=$1 FOR UPDATE", [request_id])).rows[0];
+  if (!r) return { request_id, voided: false, reason: "unknown request" };
+  if (r.billing_status !== "billed") return { request_id, voided: false, already: r.billing_status };
+  if (r.payment_status !== "settle_failed") return { request_id, voided: false, reason: `payment_status ${r.payment_status}` };
+  const accrued = Number((await c.query(`SELECT count(*)::int n FROM incentive_ledger l JOIN harvest_tokens h ON h.token = l.token WHERE h.request_id=$1`, [request_id])).rows[0].n);
+  if (accrued > 0) {
+    await c.query("UPDATE requests SET billing_status='void_review', void_detail=$2 WHERE request_id=$1", [request_id, { reason, accrued_lines: accrued, at: new Date().toISOString() }]);
+    return { request_id, voided: false, review: true, accrued_lines: accrued };
+  }
+  const deb = (await c.query(`SELECT advertiser_id, kind, (-SUM(delta_atomic))::bigint AS amt FROM balance_ledger
+      WHERE request_id=$1 AND kind IN ('impression_debit','incentive_escrow') GROUP BY 1,2 HAVING SUM(delta_atomic) < 0`, [request_id])).rows;
+  let refunded_impressions = 0, returned_escrow = 0;
+  for (const d of deb) {
+    const kind = d.kind === "impression_debit" ? "impression_refund" : "incentive_escrow_void";
+    const ins = await c.query(`INSERT INTO balance_ledger(advertiser_id,delta_atomic,kind,request_id,note) VALUES ($1,$2,$3,$4,$5)
+        ON CONFLICT (request_id, advertiser_id, kind) WHERE kind IN ('impression_refund','incentive_escrow_void') DO NOTHING RETURNING seq`,
+      [d.advertiser_id, Number(d.amt), kind, request_id, `${reason}: request not billed`]);
+    if (ins.rows.length) { if (kind === "impression_refund") refunded_impressions += Number(d.amt); else returned_escrow += Number(d.amt); }
+  }
+  const pl = (await c.query(`SELECT listing_id, provider_id, kind, SUM(amount_atomic)::bigint amt FROM incentive_pool_ledger
+      WHERE request_id=$1 AND kind IN ('funded','pool_draw') GROUP BY 1,2,3`, [request_id])).rows;
+  for (const p of pl)
+    await c.query(`INSERT INTO incentive_pool_ledger(listing_id,provider_id,kind,amount_atomic,request_id,note) VALUES ($1,$2,$3,$4,$5,$6)
+        ON CONFLICT (request_id, listing_id, kind) WHERE kind IN ('void_funded','void_draw') DO NOTHING`,
+      [p.listing_id, p.provider_id, p.kind === "funded" ? "void_funded" : "void_draw", Number(p.amt), request_id, `${reason}: request not billed`]);
+  const tok = await c.query(`UPDATE harvest_tokens SET show_atomic=0, click_atomic=0, tracked_only=true, voided_at=now() WHERE request_id=$1 AND voided_at IS NULL`, [request_id]);
+  const detail = { reason, refunded_impressions_atomic: refunded_impressions, returned_escrow_atomic: returned_escrow, pool_rows: pl.length, voided_links: tok.rowCount, at: new Date().toISOString() };
+  await c.query("UPDATE requests SET billing_status='voided', voided_at=now(), void_detail=$2 WHERE request_id=$1", [request_id, detail]);
+  return { request_id, voided: true, ...detail };
+}
+/** Standalone (own transaction): used by the sweeper and the backfill. */
 export async function voidUnbilledRequest(request_id: string, reason = "settle_failed") {
   const c = await pool.connect();
   try {
-    await c.query("BEGIN ISOLATION LEVEL READ COMMITTED");
-    await c.query("SELECT pg_advisory_xact_lock($1)", [MARKET_LOCK]);
-    await c.query("SELECT pg_advisory_xact_lock($1)", [CLICK_LEDGER_LOCK]);
-    const r = (await c.query("SELECT request_id, payment_status, billing_status FROM requests WHERE request_id=$1 FOR UPDATE", [request_id])).rows[0];
-    if (!r) { await c.query("ROLLBACK"); return { request_id, voided: false, reason: "unknown request" }; }
-    if (r.billing_status !== "billed") { await c.query("ROLLBACK"); return { request_id, voided: false, already: r.billing_status }; }
-    if (r.payment_status === "settled") { await c.query("ROLLBACK"); return { request_id, voided: false, reason: "request is settled" }; }
-    const accrued = Number((await c.query(`SELECT count(*)::int n FROM incentive_ledger l JOIN harvest_tokens h ON h.token = l.token WHERE h.request_id=$1`, [request_id])).rows[0].n);
-    if (accrued > 0) {
-      await c.query("UPDATE requests SET billing_status='void_review', void_detail=$2 WHERE request_id=$1", [request_id, { reason, accrued_lines: accrued, at: new Date().toISOString() }]);
-      await c.query("COMMIT"); return { request_id, voided: false, review: true, accrued_lines: accrued };
-    }
-    const deb = (await c.query(`SELECT advertiser_id, kind, (-SUM(delta_atomic))::bigint AS amt FROM balance_ledger
-        WHERE request_id=$1 AND kind IN ('impression_debit','incentive_escrow') GROUP BY 1,2 HAVING SUM(delta_atomic) < 0`, [request_id])).rows;
-    let refunded_impressions = 0, returned_escrow = 0;
-    for (const d of deb) {
-      const kind = d.kind === "impression_debit" ? "impression_refund" : "incentive_escrow_void";
-      const ins = await c.query(`INSERT INTO balance_ledger(advertiser_id,delta_atomic,kind,request_id,note) VALUES ($1,$2,$3,$4,$5)
-          ON CONFLICT (request_id, advertiser_id, kind) WHERE kind IN ('impression_refund','incentive_escrow_void') DO NOTHING RETURNING seq`,
-        [d.advertiser_id, Number(d.amt), kind, request_id, `${reason}: request not billed`]);
-      if (ins.rows.length) { if (kind === "impression_refund") refunded_impressions += Number(d.amt); else returned_escrow += Number(d.amt); }
-    }
-    const pl = (await c.query(`SELECT listing_id, provider_id, kind, SUM(amount_atomic)::bigint amt FROM incentive_pool_ledger
-        WHERE request_id=$1 AND kind IN ('funded','pool_draw') GROUP BY 1,2,3`, [request_id])).rows;
-    for (const p of pl)
-      await c.query(`INSERT INTO incentive_pool_ledger(listing_id,provider_id,kind,amount_atomic,request_id,note) VALUES ($1,$2,$3,$4,$5,$6)
-          ON CONFLICT (request_id, listing_id, kind) WHERE kind IN ('void_funded','void_draw') DO NOTHING`,
-        [p.listing_id, p.provider_id, p.kind === "funded" ? "void_funded" : "void_draw", Number(p.amt), request_id, `${reason}: request not billed`]);
-    const tok = await c.query(`UPDATE harvest_tokens SET show_atomic=0, click_atomic=0, tracked_only=true, voided_at=now() WHERE request_id=$1 AND voided_at IS NULL`, [request_id]);
-    const detail = { reason, refunded_impressions_atomic: refunded_impressions, returned_escrow_atomic: returned_escrow, pool_rows: pl.length, voided_links: tok.rowCount, at: new Date().toISOString() };
-    await c.query("UPDATE requests SET billing_status='voided', voided_at=now(), void_detail=$2 WHERE request_id=$1", [request_id, detail]);
-    await c.query("COMMIT");
-    return { request_id, voided: true, ...detail };
+    await c.query("BEGIN ISOLATION LEVEL READ COMMITTED"); await lockLedgers(c);
+    const out = await compensateInTx(c, request_id, reason);
+    await c.query("COMMIT"); return out;
   } catch (e) { await c.query("ROLLBACK").catch(() => {}); throw e; } finally { c.release(); }
 }
 

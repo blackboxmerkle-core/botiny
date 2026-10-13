@@ -106,11 +106,21 @@ export async function verifyExact(p: ExactPayload, c: EvmChain, req: { amount: b
   } catch (e: any) { console.error("verify rpc_error", String(e?.shortMessage ?? e?.message ?? e).slice(0, 500)); return { ok: false, reason: "rpc_error (chain RPC unavailable, try again)" }; }
   return { ok: true, payer: getAddress(a.from) };
 }
-export async function settleExact(p: ExactPayload, c: EvmChain, rpc: ChainRpc = rpcFor(c)): Promise<{ ok: boolean; tx?: string; error?: string }> {
+/** Errors that prove the transfer did NOT and can not happen from this attempt (simulation revert, bad signature,
+ *  nonce already used, no gas). Everything else (timeouts, network errors, a tx hash without a receipt) is AMBIGUOUS:
+ *  the authorization may have been broadcast, so the outcome is settled later from authorizationState on-chain. */
+export const DEFINITE_SETTLE_ERROR = /revert|execution reverted|insufficient funds|invalid signature|authorization is (used|expired|not yet valid)|nonce|FiatTokenV2|refusing to settle on mainnet|not configured/i;
+export const AMBIGUOUS_SETTLE_ERROR = /timeout|timed out|took too long|ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|socket|network|fetch failed|HTTP request failed|aborted|503|502|504|rate limit|429/i;
+export async function settleExact(p: ExactPayload, c: EvmChain, rpc: ChainRpc = rpcFor(c)): Promise<{ ok: boolean; tx?: string; error?: string; ambiguous?: boolean }> {
   let tx: string | undefined;
   try {
     tx = await rpc.submitTransfer(p.payload.authorization, p.payload.signature);
     const r = await rpc.waitReceipt(tx);
-    return r.status === "success" ? { ok: true, tx } : { ok: false, tx, error: "transaction reverted" };
-  } catch (e: any) { return { ok: false, tx, error: String(e?.shortMessage ?? e?.details ?? e?.message ?? e).slice(0, 480) }; }
+    return r.status === "success" ? { ok: true, tx } : { ok: false, tx, error: "transaction reverted" };   // mined + reverted: definite (nonce not consumed)
+  } catch (e: any) {
+    const msg = String(e?.shortMessage ?? e?.details ?? e?.message ?? e).slice(0, 480);
+    // a tx hash exists but no receipt => broadcast, outcome unknown. Before broadcast: definite only for known rejection classes.
+    const ambiguous = !!tx || AMBIGUOUS_SETTLE_ERROR.test(msg) || !DEFINITE_SETTLE_ERROR.test(msg);
+    return { ok: false, tx, error: msg, ambiguous };
+  }
 }
