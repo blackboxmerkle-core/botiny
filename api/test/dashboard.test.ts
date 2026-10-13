@@ -7,6 +7,7 @@ process.env.DASHBOARD_PASSWORD = "Test-Pass-0123456789";
 const AUTH = { authorization: "Basic " + Buffer.from("admin:Test-Pass-0123456789").toString("base64") };
 import { createApp } from "../src/app";
 import { pool } from "../src/db";
+import { replayRequest } from "../src/replay";
 import { resetTestDb as seed } from "../src/seed";
 let base = ""; let server: any;
 before(async () => { await seed(); server = createApp().listen(0); base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`; });
@@ -67,7 +68,7 @@ test("older entries stay reachable: pagination, search, legacy rows, settle_fail
   const legacy = (await pool.query("SELECT request_id FROM requests WHERE settings_version IS NULL LIMIT 1")).rows[0];
   if (legacy) {
     assert.equal((await fetch(base + "/dashboard/api/requests/" + legacy.request_id, { headers: AUTH })).status, 200);
-    assert.equal((await (await fetch(base + "/v1/requests/" + legacy.request_id + "/replay")).json()).match, true);
+    assert.equal((await replayRequest(legacy.request_id))!.match, true);
   }
   // settlement failure reason is stored and returned
   process.env.MOCK_SETTLE_FAIL = "1";
@@ -77,7 +78,7 @@ test("older entries stay reachable: pagination, search, legacy rows, settle_fail
   assert.equal(f.status, 402); assert.equal(fj.error, "settlement_failed"); assert.ok(!("reason" in fj));
   const d = await (await fetch(base + "/dashboard/api/requests/" + fj.request_id, { headers: AUTH })).json();
   assert.equal(d.payment_status, "settle_failed"); assert.equal(d.settle_error, "mock_settle_failure");
-  assert.equal((await (await fetch(base + "/v1/requests/" + fj.request_id + "/replay")).json()).match, true);
+  assert.equal((await replayRequest(fj.request_id))!.match, true);
 });
 test("admin ToS editor: new version per save, served at /v1/terms, DRAFT enforced, old hash becomes stale", async () => {
   const H2 = { ...AUTH, "content-type": "application/json" };

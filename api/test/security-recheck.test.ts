@@ -8,6 +8,7 @@ process.env.DASHBOARD_PASSWORD = "Test-Pass-0123456789";
 import { tosHashOf, DEFAULT_TOS } from "../src/tos";
 import { createApp } from "../src/app";
 import { pool } from "../src/db";
+import { replayRequest } from "../src/replay";
 import { resetTestDb } from "../src/seed";
 import { _resetRateLimits } from "../src/portal";
 import { sweep, _setAuthChecker } from "../src/reconcile";
@@ -89,7 +90,8 @@ test("C+D) settle_unknown: 202, stays billed; reconciler marks settled (used) or
   assert.deepEqual(await row(u1.request_id), { payment_status: "settled", billing_status: "billed" });
   assert.deepEqual(await row(u2.request_id), { payment_status: "settle_failed", billing_status: "voided" });
   assert.equal(b0 - await balance("adv:su"), debited / 2, "only the unsettled request was refunded");
-  assert.equal((await (await fetch(base + "/v1/requests/" + u2.request_id + "/replay")).json()).match, true);
+  assert.equal((await replayRequest(u2.request_id))!.match, true);
+  const pubRp = await (await fetch(base + "/v1/requests/" + u2.request_id + "/replay")).json(); assert.equal(pubRp.restricted, true); assert.equal(pubRp.replayed_hash, undefined, "no re-rank when unsettled");
   // leftover billed + settle_failed (e.g. crash between commit and compensation) -> sweeper compensates, idempotently
   const s3 = await rec(); assert.equal(s3.status, 200);
   await pool.query("UPDATE requests SET payment_status='settle_failed' WHERE request_id=$1", [s3.request_id]);

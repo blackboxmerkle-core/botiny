@@ -9,6 +9,7 @@ process.env.DASHBOARD_PASSWORD = "Test-Pass-0123456789";
 import { tosHashOf, DEFAULT_TOS } from "../src/tos";
 import { createApp } from "../src/app";
 import { pool } from "../src/db";
+import { replayRequest } from "../src/replay";
 import { resetTestDb } from "../src/seed";
 import { _resetRateLimits } from "../src/portal";
 import { _resetAdminLockout, passwordStrong } from "../src/auth";
@@ -103,7 +104,7 @@ test("settle_failed: impression debit + escrow reversed, links voided, request n
   assert.ok(toks.length && toks.every(t => t.s === 0 && t.c === 0 && t.tracked_only && t.voided_at), "links voided (nothing payable)");
   const req = (await pool.query("SELECT payment_status, billing_status, response_hash FROM requests WHERE request_id=$1", [r.request_id])).rows[0];
   assert.equal(req.payment_status, "settle_failed"); assert.equal(req.billing_status, "voided"); assert.ok(req.response_hash, "request/response log kept for audit");
-  assert.equal((await (await fetch(base + "/v1/requests/" + r.request_id + "/replay")).json()).match, true);
+  assert.equal((await replayRequest(r.request_id))!.match, true);
   const again = await voidUnbilledRequest(r.request_id); assert.equal(again.voided, false); assert.equal((again as any).already, "voided");
   assert.equal(await balance("adv:sf"), before, "idempotent");
   // a normal (settled) request is untouched and still debits

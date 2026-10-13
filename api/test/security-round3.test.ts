@@ -40,12 +40,16 @@ test("1) unsettled request: no impressions/results publicly; replay gives MATCH 
   const pub = await get("/v1/requests/" + u.request_id);
   assert.equal(pub.restricted, true); assert.equal(pub.impressions, undefined); assert.equal(pub.request_canonical, undefined); assert.ok(pub.response_hash);
   const rp = await get(`/v1/requests/${u.request_id}/replay`);
-  assert.equal(rp.result, "MATCH"); assert.equal(rp.match, true); assert.ok(rp.logged_hash && rp.replayed_hash); assert.equal(rp.payment, undefined); assert.equal(rp.restricted, true);
+  assert.ok(rp.logged_hash && rp.request_hash); assert.equal(rp.replayed_hash, undefined, "round 4: no re-rank when unsettled"); assert.equal(rp.payment, undefined); assert.equal(rp.restricted, true);
+  assert.equal((await get(`/v1/requests/${u.request_id}/replay`, { "x-payer-signature": "0x" + "ab".repeat(65), "x-payer-timestamp": "1e9" })).restricted, true, "non-digit timestamp rejected");
   const ts = Math.floor(Date.now() / 1000);
   const sig = await acct.signMessage({ message: `botiny:request:${u.request_id}:${ts}` });
   const mine = await get("/v1/requests/" + u.request_id, { "x-payer-signature": sig, "x-payer-timestamp": String(ts) });
   assert.ok(Array.isArray(mine.impressions) && mine.impressions.length > 0, "payer sees impressions");
-  assert.ok((await get(`/v1/requests/${u.request_id}/replay`, { "x-payer-signature": sig, "x-payer-timestamp": String(ts) })).payment);
+  const prp = await get(`/v1/requests/${u.request_id}/replay`, { "x-payer-signature": sig, "x-payer-timestamp": String(ts) });
+  assert.ok(prp.payment); assert.equal(prp.result, "MATCH");
+  assert.equal((await get("/v1/requests/" + u.request_id, { "x-payer-signature": sig, "x-payer-timestamp": String(ts) + ".0" })).restricted, true, "timestamp must be /^\\d{1,12}$/");
+  assert.equal((await get("/v1/requests/" + u.request_id, { "x-payer-signature": sig, "x-payer-timestamp": "0" + String(ts) })).restricted, true, "signed string must match exactly");
   const other = privateKeyToAccount(generatePrivateKey());
   const bad = await other.signMessage({ message: `botiny:request:${u.request_id}:${ts}` });
   assert.equal((await get("/v1/requests/" + u.request_id, { "x-payer-signature": bad, "x-payer-timestamp": String(ts) })).restricted, true, "wrong signer");
@@ -89,10 +93,24 @@ test("6) validBefore capped at verify (default now+600 s, X402_MAX_VALID_BEFORE_
   assert.match(r3.reason, /invalid_valid_before/); delete process.env.X402_MAX_VALID_BEFORE_S;
 });
 
-test("6) permanent settle errors are definite; transient/unknown are ambiguous; a broadcast tx is always ambiguous", () => {
-  for (const m of ["invalid signature", "invalid_exact_evm_payload_signature", "insufficient balance", "insufficient_funds", "ERC20: transfer amount exceeds balance",
-    "FiatTokenV2: authorization is used or canceled", "nonce already used", "Missing or invalid parameters.", "invalid_payload", "authorization is expired", "expired"])
-    assert.equal(isAmbiguousSettleError(m), false, m);
-  for (const m of ["request timed out", "fetch failed", "ECONNRESET", "HTTP 503", "something odd happened"]) assert.equal(isAmbiguousSettleError(m), true, m);
-  assert.equal(isAmbiguousSettleError("invalid signature", "0xabc"), true);
+test("round 4: settle-error classification (ambiguous first, exact definite strings only)", () => {
+  const def: [string, "self" | "facilitator"][] = [
+    ['The contract function "transferWithAuthorization" reverted with the following reason:\nFiatTokenV2: authorization is used or canceled', "self"],
+    ["execution reverted: FiatTokenV2: authorization is expired", "self"], ["FiatTokenV2: authorization is not yet valid", "self"],
+    ["FiatTokenV2: invalid signature", "self"], ["EIP3009: invalid signature", "self"], ["invalid signature", "self"],
+    ["ERC20: transfer amount exceeds balance", "self"], ["transaction reverted", "self"],
+    ["pre-broadcast: refusing to settle on mainnet", "self"], ["pre-broadcast: RELAYER_PRIVATE_KEY not configured", "facilitator"],
+    ["Missing or invalid parameters.\nDouble check you have provided the correct parameters.", "facilitator"]];
+  for (const [m, src] of def) assert.equal(isAmbiguousSettleError(m, null, src), false, m);
+  const amb: [string, "self" | "facilitator"][] = [
+    ["request timed out", "self"], ["fetch failed", "self"], ["ECONNRESET", "self"], ["HTTP request failed.\n\nStatus: 503", "facilitator"], ["Status: 429", "self"],
+    ["nonce too low", "self"], ["replacement transaction underpriced", "self"], ["already known", "self"], ["transaction broadcast but not mined", "self"],
+    ["Missing or invalid parameters.\nDouble check you have provided the correct parameters.\n\nURL: https://sepolia.base.org", "self"],   // RPC on eth_sendRawTransaction
+    ["Missing or invalid parameters.", "self"], ["HTTP request failed.\n\nStatus: 429\nURL: https://sepolia.base.org/", "facilitator"],
+    ["nonce", "self"], ["expired", "self"], ["invalid_exact_evm_payload_signature", "facilitator"], ["insufficient_funds", "facilitator"],
+    ["FiatTokenV2: authorization is used or canceled", "facilitator"],   // self-only USDC revert patterns
+    ["", "self"], ["something odd happened", "self"]];
+  for (const [m, src] of amb) assert.equal(isAmbiguousSettleError(m, null, src), true, m);
+  assert.equal(isAmbiguousSettleError("FiatTokenV2: invalid signature", "0xabc"), true, "a broadcast tx is always ambiguous");
+  assert.equal(isAmbiguousSettleError("FiatTokenV2: authorization is expired; request timed out"), true, "ambiguous patterns checked first");
 });

@@ -18,6 +18,7 @@ import { MARKET_LOCK, marketSeq, assertNonNegative, advertiserByKey, advertiserS
 import { portalRouter, suggestionsAdminRouter, sessionAdvertiser, sessionOf, listCampaigns, listingStats, createCampaign, rateLimit } from "./portal";
 import { payerFromHeader } from "./bans";
 import { recordSettlement } from "./reconcile";
+import { replayRow } from "./replay";
 import { issueClickLinks, pgEngine, scoreClick, settleIncentives, clawbackClick, clearReview, earnings, clickKeys } from "./clicks";
 
 export const botId = (req: express.Request) => { const b = req.get("X-Bot-Id"); return b && /^[A-Za-z0-9._:-]{1,64}$/.test(b) ? b : null; };
@@ -161,23 +162,34 @@ export function createApp() {
   // Result content (impressions, request/response bodies, payment details) is public only once the payment SETTLED, or to the
   // proven payer: X-Payer-Signature = EIP-191 personal_sign over `botiny:request:<request_id>:<X-Payer-Timestamp>` (unix s, ±300 s).
   const payerProved = async (req: express.Request, r: any) => {
-    const sig = req.get("x-payer-signature"), ts = Number(req.get("x-payer-timestamp"));
-    if (!sig || !r.payer || !Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > 300 || !/^0x[0-9a-fA-F]{130}$/.test(sig)) return false;
-    try { const { verifyMessage } = await import("viem");
-      return await verifyMessage({ address: r.payer as `0x${string}`, message: `botiny:request:${r.request_id}:${ts}`, signature: sig as `0x${string}` }); } catch { return false; }
+    const sig = req.get("x-payer-signature"), tsRaw = req.get("x-payer-timestamp") ?? "";
+    if (!sig || !r.payer || !/^\d{1,12}$/.test(tsRaw) || !/^0x[0-9a-fA-F]+$/.test(sig) || sig.length > 4096) return false;
+    const ts = Number(tsRaw); if (Math.abs(Date.now() / 1000 - ts) > 300) return false;
+    const message = `botiny:request:${r.request_id}:${tsRaw}`;
+    try {
+      const { verifyMessage } = await import("viem");
+      if (sig.length === 132 && await verifyMessage({ address: r.payer as `0x${string}`, message, signature: sig as `0x${string}` })) return true;   // EOA
+      // EIP-1271 (smart-contract wallet): public client on the request's payment chain, testnets only, 5 s timeout
+      const { configuredChains } = await import("./chains");
+      const c = configuredChains().find(x => x.chainId === Number(r.payment_chain_id));
+      if (!c || !c.testnet || !c.rpc) return false;
+      const { createPublicClient, http } = await import("viem");
+      const pc = createPublicClient({ transport: http(c.rpc, { timeout: 5000, retryCount: 0 }) });
+      return await Promise.race([pc.verifyMessage({ address: r.payer as `0x${string}`, message, signature: sig as `0x${string}` }), new Promise<boolean>(ok => setTimeout(() => ok(false), 6000))]);
+    } catch { return false; }
   };
   const fullView = async (req: express.Request, r: any) => r.payment_status === "settled" || await payerProved(req, r);
 
   app.get("/v1/requests/:id/replay", limit("replay", 120), async (req, res) => {
     const r = (await pool.query("SELECT * FROM requests WHERE request_id=$1", [req.params.id])).rows[0];
     if (!r) return res.status(404).json({ error: "not found" });
-    const p = JSON.parse(r.request_canonical);
+    const logged = { request_id: r.request_id, logged_hash: r.response_hash, request_hash: r.request_hash, payment_status: r.payment_status };
+    // unsettled + not the payer: no re-rank at all (no result-derived signal), only the logged hashes + status
+    if (!(await fullView(req, r))) return res.json({ ...logged, restricted: true, message: "replay is computed once payment settled, or for the payer (X-Payer-Signature)" });
     try {
-      const out = await rank(pool, { query: p.query, k: p.k, catalogue_seq: Number(r.catalogue_seq), embedding_model: r.embedding_model, ranker_version: r.ranker_version,
-        market_seq: r.market_seq == null ? undefined : Number(r.market_seq), settings_version: r.settings_version ?? undefined, pacing_at_ms: p.pacing_at_ms });
+      const out = await replayRow(r);
       const base = { request_id: r.request_id, logged_hash: r.response_hash, replayed_hash: out.hash, match: out.hash === r.response_hash, result: out.hash === r.response_hash ? "MATCH" : "MISMATCH",
         request_hash_ok: sha256(r.request_canonical) === r.request_hash, payment_status: r.payment_status };
-      if (!(await fullView(req, r))) return res.json({ ...base, restricted: true });
       res.json({ ...base, catalogue_seq: Number(r.catalogue_seq),
         market_seq: r.market_seq == null ? null : Number(r.market_seq), settings_version: r.settings_version, ranker_version: r.ranker_version,
         tos: r.tos_version == null ? null : { version: r.tos_version, sha256: r.tos_hash, proof: r.tos_proof }, payment: { network: r.payment_network, chain_id: r.payment_chain_id, settle_tx: r.settle_tx, settle_via: r.settle_via, pay_to: r.pay_to } });

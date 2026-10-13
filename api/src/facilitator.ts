@@ -56,8 +56,8 @@ function viemRpc(c: EvmChain): ChainRpc {
     balanceOf: addr => pub.readContract({ address: c.usdc, abi: USDC_ABI, functionName: "balanceOf", args: [addr as `0x${string}`] }),
     nativeBalance: addr => pub.getBalance({ address: addr as `0x${string}` }),
     async submitTransfer(a, sig) {
-      if (!c.testnet) throw new Error("refusing to settle on mainnet");
-      const account = relayerAccount(); if (!account) throw new Error("RELAYER_PRIVATE_KEY not configured");
+      if (!c.testnet) throw new Error("pre-broadcast: refusing to settle on mainnet");
+      const account = relayerAccount(); if (!account) throw new Error("pre-broadcast: RELAYER_PRIVATE_KEY not configured");
       const { r, s, v, yParity } = parseSignature(sig as `0x${string}`);
       const vv = Number(v ?? BigInt(27 + (yParity ?? 0)));
       const args = [a.from, a.to, BigInt(a.value), BigInt(a.validAfter), BigInt(a.validBefore), a.nonce, vv, r, s] as const;
@@ -107,16 +107,30 @@ export async function verifyExact(p: ExactPayload, c: EvmChain, req: { amount: b
   } catch (e: any) { console.error("verify rpc_error", String(e?.shortMessage ?? e?.message ?? e).slice(0, 500)); return { ok: false, reason: "rpc_error (chain RPC unavailable, try again)" }; }
   return { ok: true, payer: getAddress(a.from) };
 }
-/** Errors that prove the transfer did NOT and can not happen from this attempt (simulation revert, bad signature,
- *  nonce already used, no gas). Everything else (timeouts, network errors, a tx hash without a receipt) is AMBIGUOUS:
- *  the authorization may have been broadcast, so the outcome is settled later from authorizationState on-chain. */
-export const DEFINITE_SETTLE_ERROR = /revert|execution reverted|insufficient[ _-]?(funds|balance)|transfer amount exceeds balance|invalid[ _-]?signature|invalid_exact|authorization is (used|expired|not yet valid)|nonce (already )?used|already used|nonce|expired|missing or invalid parameters|invalid[ _-]?param|invalid_payload|invalid_payment|FiatTokenV2|refusing to settle on mainnet|not configured/i;
-export const AMBIGUOUS_SETTLE_ERROR = /timeout|timed out|took too long|ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|socket|network|fetch failed|HTTP request failed|aborted|503|502|504|rate limit|429/i;
-/** Shared classifier: a known permanent rejection (and no broadcast tx) is definite; everything else is ambiguous. */
-export function isAmbiguousSettleError(msg: string, tx?: string | null) {
-  if (tx) return true;                                   // broadcast: outcome unknown until the chain says so
-  if (DEFINITE_SETTLE_ERROR.test(msg)) return false;     // permanent: invalid signature, balance, nonce used, bad params, expired
-  return true;                                           // timeouts, network, unclassified
+/** Settle-error classification (round 4). Order matters:
+ *   1. a broadcast tx hash               -> AMBIGUOUS (outcome only knowable on-chain)
+ *   2. any AMBIGUOUS pattern              -> AMBIGUOUS (timeouts, network, nonce too low, replacement underpriced, already known, ...)
+ *   3. an exact / near-exact known string -> DEFINITE  (USDC EIP-3009 reverts, our own pre-broadcast refusals,
+ *                                                       x402.org "Missing or invalid parameters" which it returns before broadcasting)
+ *   4. anything else                      -> AMBIGUOUS
+ *  No bare "nonce"/"expired"/"invalid params" matching: e.g. an RPC "Missing or invalid parameters" on eth_sendRawTransaction is ambiguous. */
+export const AMBIGUOUS_SETTLE_ERROR = /timeout|timed out|took too long|ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|socket|network|fetch failed|HTTP request failed|aborted|\b50[234]\b|rate limit|\b429\b|nonce too low|nonce too high|replacement (transaction )?underpriced|already known|known transaction|(?<!pre-)broadcast|pending|underpriced|gas price|max fee|could not coalesce|header not found|missing trie node/i;
+export const DEFINITE_SETTLE_PATTERNS: { source: "self" | "facilitator" | "any"; re: RegExp }[] = [
+  { source: "self", re: /FiatTokenV2: authorization is used or canceled/ },
+  { source: "self", re: /FiatTokenV2: authorization is expired|\bauthorization is expired\b/ },
+  { source: "self", re: /FiatTokenV2: authorization is not yet valid|\bauthorization is not yet valid\b/ },
+  { source: "self", re: /(FiatTokenV2|EIP3009|ECRecover): invalid signature|(^|reason:\s*)invalid signature$/m },
+  { source: "self", re: /ERC20: transfer amount exceeds balance|\btransfer amount exceeds balance\b/ },
+  { source: "self", re: /^transaction reverted$/ },                                    // mined receipt with status=reverted
+  { source: "any",  re: /^pre-broadcast: / },                                          // our own refusals before any submit
+  { source: "facilitator", re: /^Missing or invalid parameters\.(\s|$)/ },           // x402.org pre-broadcast rejection
+];
+/** true => ambiguous (settle_unknown, reconcile on-chain); false => definite (compensate now). */
+export function isAmbiguousSettleError(msg: string, tx?: string | null, source: "self" | "facilitator" = "self") {
+  if (tx) return true;
+  const m = String(msg ?? "").trim();
+  if (!m || AMBIGUOUS_SETTLE_ERROR.test(m)) return true;
+  return !DEFINITE_SETTLE_PATTERNS.some(p => (p.source === "any" || p.source === source) && p.re.test(m));
 }
 export const MAX_VALID_BEFORE_S = () => Number(process.env.X402_MAX_VALID_BEFORE_S ?? 600);
 export async function settleExact(p: ExactPayload, c: EvmChain, rpc: ChainRpc = rpcFor(c)): Promise<{ ok: boolean; tx?: string; error?: string; ambiguous?: boolean }> {
