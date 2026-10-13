@@ -29,3 +29,26 @@ revenue (`expired_revenue`). Offers carry `budget_atomic` + `expires_at`; ranker
 linear budget schedule a bounded pacing boost inside the promoted slots (only above the relevance threshold), with
 `pacing_at_ms` pinned in the request so replay matches. Reports: `GET /v1/advertisers/me/incentives/report[?format=csv]`,
 Admin → Incentives. Legacy `incentive_escrow_reversal` rows written before this change are kept (append-only).
+
+## Every result is tracked (migration 0004)
+
+`/v1/recommend` issues a unique signed link (`short_url` + `track_url`, in the sibling `click_links` field, outside
+the hashed `response`) for **every** ranked result and every searching bot — not only incentivised ones.
+
+- Rows inside the curated incentive set keep the existing behaviour (offers, caps, pool/pacing, escrow, no refunds).
+- Rows outside it, and every row when incentives are off, are **tracking-only** (`harvest_tokens.tracked_only`):
+  show/click amounts 0, no escrow, no `balance_ledger` / `incentive_pool_ledger` / `incentive_ledger` rows.
+  Clicks redirect normally and are recorded in `clicks` with class `tracked` (never paid). Preview/bot/expired/
+  too-fast/burst/self classification still runs so analytics can exclude them; self-clicks on tracking-only links
+  do not add fraud strikes (there is nothing to gain) and never unlock chat show incentives.
+- A zero-amount link inside the incentive set is handled the same way (class `tracked`, never consumes the
+  per-set / per-user paid caps) unless its set carries chat show incentives, in which case it still acts as the
+  click gate that unlocks them, exactly as before.
+- Payer that is not a wallet: links are still issued (bot_wallet `unbound:<payer>`), all tracking-only.
+- `CLICK_INCENTIVES=0`: incentives disabled, links still issued (all tracking-only).
+- **No `CLICK_SIGNING_KEY_JWK` in production**: links are signed by a per-process ephemeral key and are all
+  tracking-only (incentives forced off — nothing payable depends on an unstable key). Because the stored
+  `harvest_tokens` row is the authority for a tracking-only redirect, such links keep resolving after a restart
+  (`unknown_kid` is accepted only for tracked_only rows with zero amounts). The key is not published in JWKS.
+- Dashboard → API usage → "Result click analytics": links, clicks, human clicks, CTR by segment
+  (organic / promoted / incentive), by rank and by listing (`GET /dashboard/api/click-analytics?hours=`).

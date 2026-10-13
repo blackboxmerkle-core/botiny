@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS harvest_tokens (
   dest_url TEXT NOT NULL, dest_url_hash TEXT NOT NULL,
   show_atomic BIGINT NOT NULL DEFAULT 0 CHECK (show_atomic >= 0),
   click_atomic BIGINT NOT NULL DEFAULT 0 CHECK (click_atomic >= 0),
-  issued_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL);
+  issued_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL,
+  tracked_only BOOLEAN NOT NULL DEFAULT false);   -- zero-incentive usage-tracking link (never paid)
 CREATE INDEX IF NOT EXISTS harvest_tokens_set ON harvest_tokens(set_id);
 CREATE INDEX IF NOT EXISTS harvest_tokens_bot ON harvest_tokens(bot_wallet, issued_at);
 
@@ -29,7 +30,7 @@ CREATE TABLE IF NOT EXISTS clicks (
   set_id TEXT NOT NULL, listing_id TEXT NOT NULL, bot_wallet TEXT NOT NULL,
   at TIMESTAMPTZ NOT NULL, end_user_key TEXT NOT NULL, ip_trunc TEXT, raw_ip INET, -- raw_ip nulled after 24h
   ua TEXT, asn INT, signed_agent TEXT,
-  class TEXT NOT NULL CHECK (class IN ('paid_candidate','unpaid_duplicate','unpaid_expired','bot','preview','self')),
+  class TEXT NOT NULL CHECK (class IN ('paid_candidate','unpaid_duplicate','unpaid_expired','bot','preview','self','tracked')),
   reasons TEXT[] NOT NULL DEFAULT '{}', paid BOOLEAN NOT NULL DEFAULT false, clawed_back BOOLEAN NOT NULL DEFAULT false);
 CREATE UNIQUE INDEX IF NOT EXISTS clicks_one_paid_per_token ON clicks(token) WHERE paid;
 CREATE INDEX IF NOT EXISTS clicks_key_at ON clicks(end_user_key, at);

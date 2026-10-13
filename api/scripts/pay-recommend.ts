@@ -6,7 +6,7 @@ const raw = process.env.PAYER_PRIVATE_KEY; if (!raw) throw new Error("PAYER_PRIV
 const account = privateKeyToAccount((raw.startsWith("0x") ? raw : "0x" + raw) as `0x${string}`);
 const url = process.env.API_URL ?? "http://localhost:8402/v1/recommend";
 (async () => {
-  const params = { query: process.argv[2] ?? "x402 facilitator to settle USDC payments", k: 3 };
+  const params = { query: process.argv[2] ?? "x402 facilitator to settle USDC payments", k: Number(process.env.K ?? 3) };
   const r = await paidFetch(url, "/v1/recommend", params, JSON.stringify(params), { account, networks: [process.env.PAY_NETWORK ?? "base-sepolia"], maxAmount: 10_000n });
   const xpr = r.res.headers.get("x-payment-response");
   console.log(JSON.stringify({ status: r.res.status, payer: account.address, network: r.paid ? r.accept.network : null, tos: r.paid ? r.tos : null,

@@ -44,7 +44,7 @@ test("setup: advertiser offers incentives; validation + ownership", async () => 
 test("unfunded advertiser: links issued but zero incentive, no escrow, nothing negative", async () => {
   const r = await rec(Q);
   assert.equal(r.status, 200);
-  assert.equal(r.click_links.length, r.response.results.length > 0 ? r.click_links.length : 0);
+  assert.equal(r.click_links.length, r.response.results.length);
   assert.ok(r.click_links.every((c: any) => c.show_incentive_atomic === 0 && c.click_incentive_atomic === 0));
   assert.equal((await pool.query("SELECT count(*)::int n FROM balance_ledger WHERE kind='incentive_escrow'")).rows[0].n, 0);
 });
@@ -55,8 +55,11 @@ test("funded: caps applied, escrow in same tx as request/impressions, tokens ver
   const r = await rec(Q, 8, { "X-Bot-Channel": "chat" });
   assert.equal(r.status, 200);
   const fee = 1000; // default query_price_atomic
-  const mine = r.click_links.filter((c: any) => [L1, L2, L3].includes(c.listing_id));
-  assert.ok(mine.length > 0 && mine.length <= 2, "≤2 slots per cluster get links");
+  const all = r.click_links.filter((c: any) => [L1, L2, L3].includes(c.listing_id));
+  const mine = all.filter((c: any) => !c.tracked_only);
+  assert.ok(mine.length > 0 && mine.length <= 2, "≤2 slots per cluster get incentivised links");
+  assert.equal(all.length, r.response.results.filter((x: any) => [L1, L2, L3].includes(x.listing_id)).length, "every result has a link");
+  assert.ok(all.filter((c: any) => c.tracked_only).every((c: any) => c.show_incentive_atomic + c.click_incentive_atomic === 0));
   for (const c of mine) { assert.ok(c.show_incentive_atomic <= 0.25 * fee && c.click_incentive_atomic <= 0.25 * fee); assert.equal(c.disclosure, "Incentivised listing"); }
   const total = mine.reduce((s: number, c: any) => s + c.show_incentive_atomic + c.click_incentive_atomic, 0);
   assert.ok(total > 0 && total <= 0.5 * fee, `cluster cap: ${total}`);

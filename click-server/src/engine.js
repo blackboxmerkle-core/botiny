@@ -1,5 +1,5 @@
 import { signToken, verifyToken } from './token.js';
-import { base62Code, sha256Hex } from './b64.js';
+import { b64u, base62Code, sha256Hex } from './b64.js';
 import { buildResultSet } from './curation.js';
 import { classifyRequest, endUserKey, truncateIp, saltPeriod } from './classify.js';
 import { accrue, clawback, entryState, entries } from './ledger.js';
@@ -14,9 +14,19 @@ export class ClickEngine {
   constructor(deps) { Object.assign(this, deps); }
 
   /** Called by the API after ranking (POST /v1/recommend). ranked items may carry response_rank. */
-  async issueSet({ set_id, request_id, bot_wallet, channel = 'chat', ranked, now = Date.now() }) {
+  /** trackAll: also issue zero-incentive, tracking-only links for ranked rows curation dropped (every result gets a link).
+   *  incentives=false: all amounts 0 (incentives disabled / no stable signing key / payer not a wallet). */
+  async issueSet({ set_id, request_id, bot_wallet, channel = 'chat', ranked, now = Date.now(), trackAll = false, incentives = true }) {
     const { cfg, store } = this;
-    const { incentivised, items } = buildResultSet(ranked, cfg);
+    const built = buildResultSet(ranked, cfg);
+    const incentivised = incentives && built.incentivised;
+    let items = built.items.map(it => incentives ? { ...it, tracked_only: false } : { ...it, show_atomic: 0, click_atomic: 0, disclosure: null, tracked_only: true });
+    if (trackAll) {
+      const key = r => `${r.listing_id}#${r.response_rank ?? r.rank}`;
+      const inSet = new Map(items.map(it => [key(it), it]));
+      items = ranked.map((r, i) => inSet.get(key({ ...r, rank: r.response_rank ?? i + 1 }))
+        ?? { ...r, rank: i + 1, show_atomic: 0, click_atomic: 0, disclosure: null, tracked_only: true });
+    }
     const results = []; let escrow = 0;
     for (const it of items) {
       const rank = it.response_rank ?? it.rank;   // caller's rank if supplied (curation may drop rows)
@@ -24,13 +34,14 @@ export class ClickEngine {
       const { token, payload } = await signToken(this.signingKey, this.kid, {
         result_id, set_id, request_id, rank, listing_id: it.listing_id, provider_id: it.provider_id ?? it.cluster_id,
         cluster_id: it.cluster_id, bot_wallet, dest_url: it.dest_url, show_atomic: it.show_atomic, click_atomic: it.click_atomic, channel,
+        ...(it.tracked_only ? { tracked_only: true } : {}),
       }, { now, validityMs: cfg.tokenPayValidityMs });
-      await store.putToken({ token, ...payload, dest_url: it.dest_url, issued_at: now, expires_at: payload.exp });
+      await store.putToken({ token, ...payload, tracked_only: !!it.tracked_only, dest_url: it.dest_url, issued_at: now, expires_at: payload.exp });
       let code = null;
       for (let i = 0; i < 5 && !code; i++) { const c = base62Code(cfg.shortCodeLength); try { await store.putShortLink({ code: c, token, dest_url: it.dest_url, exp: payload.exp }); code = c; } catch { /* collision, retry */ } }
       escrow += it.show_atomic + it.click_atomic;
       results.push({ listing_id: it.listing_id, rank, harvest_token: token, short_url: `${this.shortBase}/${code}`,
-        track_url: `${this.shortBase}/r/${token}`, show_incentive_atomic: it.show_atomic, click_incentive_atomic: it.click_atomic, disclosure: it.disclosure });
+        track_url: `${this.shortBase}/r/${token}`, show_incentive_atomic: it.show_atomic, click_incentive_atomic: it.click_atomic, disclosure: it.disclosure, tracked_only: !!it.tracked_only });
     }
     return { set_id, incentivised, escrow_atomic: escrow, results };
   }
@@ -43,10 +54,16 @@ export class ClickEngine {
   async resolve(codeOrToken) {
     let token = codeOrToken;
     if (!codeOrToken.startsWith('hv_')) { const link = await this.store.getShortLink(codeOrToken); if (!link) return null; token = link.token; }
-    const v = await verifyToken(this.verifyKeys, token);
-    if (!v.ok) return null;
+    let v = await verifyToken(this.verifyKeys, token);
     const row = await this.store.getToken(token);
     if (!row) return null;                                   // only redirect to targets we stored at issue
+    // Tracking-only links (zero incentive, never paid) signed by a key that is no longer loaded (e.g. ephemeral
+    // key from a previous process): the stored row is the authority for the redirect; nothing is payable.
+    if (!v.ok && v.reason === 'unknown_kid' && row.tracked_only && row.show_atomic === 0 && row.click_atomic === 0) {
+      const [body] = token.slice(3).split('.');
+      try { v = { ok: true, payload: JSON.parse(new TextDecoder().decode(b64u.dec(body))) }; } catch { return null; }
+    }
+    if (!v.ok) return null;                                   // only redirect to targets we stored at issue
     if (await sha256Hex(row.dest_url) !== v.payload.dest_url_hash) return null;
     return { token, row, payload: v.payload };
   }
@@ -81,6 +98,15 @@ export class ClickEngine {
     if (c.cls === 'bot') return done('bot', c.reasons);
     if (now > tok.expires_at) return done('unpaid_expired', ['expired']);
     if (now - tok.issued_at < cfg.minClickDelayMs) return done('bot', ['too_fast_after_issue']);
+    // Tracking-only link (no offer, outside the incentive set): usage analytics only. Never paid, never unlocks shows,
+    // no fraud strikes (nothing to gain), but still classified so analytics can exclude bots / self / bursts.
+    // A zero-amount link inside the set is treated the same unless it can gate chat show incentives of its set.
+    const gatesShows = tok.channel === 'chat' && (await store.tokensForSet(tok.set_id)).some(t => t.show_atomic > 0);
+    if (tok.tracked_only || (tok.show_atomic + tok.click_atomic === 0 && !gatesShows)) {
+      if (await store.isSelf(tok.bot_wallet, tok.cluster_id, key)) return done('self', ['self_click', 'no_incentive']);
+      if ((await store.countClicksByKeySince(key, now - cfg.burstWindowMs)) >= cfg.burstMaxClicks) return done('bot', ['burst']);
+      return done('tracked', []);
+    }
     if (await store.isSelf(tok.bot_wallet, tok.cluster_id, key)) {
       await store.addStrike({ bot_wallet: tok.bot_wallet, reason: 'self_click', ts: now, click_id: ev.click_id });
       return done('self', ['self_click']);

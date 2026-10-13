@@ -33,6 +33,11 @@ button.sm{background:#21262d;color:var(--fg);border:1px solid var(--line);paddin
 <section id="t-usage">
  <div class="filters">Bot <select id="u-bot"><option value="">all bots</option></select></div>
  <div class="grid" id="kpis"></div>
+ <div class="card" style="margin-top:16px" id="clk-card"><h2>Result click analytics (7d) <span class="mut" style="text-transform:none">· every result carries a tracked link · CTR = links with ≥1 human click / links issued (bot, preview &amp; self clicks excluded)</span></h2>
+  <div class="grid" id="clk-kpi"></div>
+  <div class="two" style="margin-top:12px"><div><h3 class="sh">Organic vs promoted vs incentive</h3><table id="clk-seg"></table><h3 class="sh">CTR by rank</h3><table id="clk-rank"></table></div>
+  <div><h3 class="sh">Click classes</h3><table id="clk-class"></table><h3 class="sh">Recent clicks</h3><table id="clk-recent"></table></div></div>
+  <h3 class="sh">CTR by listing (top 50)</h3><table id="clk-lst"></table></div>
  <div class="card" style="margin-top:16px"><h2>Per-bot activity (24h)</h2><table id="bybot"></table></div>
  <div class="card" style="margin-top:16px"><h2>Requests over time (10-min buckets, 24h) <span class="mut" style="text-transform:none">· green 200 · amber 402 · red other errors</span></h2><div class="bar" id="chart"></div></div>
  <div class="two" style="margin-top:16px">
@@ -162,7 +167,16 @@ const addr=a=>`<a target=_blank href="https://sepolia.basescan.org/address/${a}"
 const st=s=>`<span class="badge ${s==="settled"?"g":s==="verified"?"y":"r"}">${esc(s)}</span>`;
 let tab="usage";
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{tab=b.dataset.t;document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x===b));document.querySelectorAll("main>section").forEach(s=>s.classList.toggle("hide",s.id!=="t-"+tab));load()});
-async function usage(){const ub=$("#u-bot").value;const u=await j("api/usage"+(ub?"?bot="+encodeURIComponent(ub):""));
+async function clickAnalytics(){const a=await j("api/click-analytics");const T=a.totals||{};const ctr=v=>v==null?"–":v.toFixed(2)+"%";
+ $("#clk-kpi").innerHTML=[["Links issued",T.links],["Clicks (all)",T.clicks],["Human clicks",T.human_clicks],["Links clicked",T.clicked_links],["CTR",ctr(T.ctr_pct)],["Paid clicks",T.paid_clicks]].map(([k,v])=>`<div class="card kpi">${v??0}<small>${k}</small></div>`).join("");
+ const hd="<th>Links</th><th>Clicks</th><th>Human</th><th>Clicked links</th><th>CTR</th><th>Paid</th>",rw=r=>`<td>${r.links}</td><td>${r.clicks}</td><td>${r.human_clicks}</td><td>${r.clicked_links}</td><td><b>${ctr(r.ctr_pct)}</b></td><td>${r.paid_clicks}</td>`;
+ const sb=s=>`<span class="badge ${s==="incentive"?"y":s==="promoted"?"r":"g"}">${esc(s)}</span>`;
+ $("#clk-seg").innerHTML="<tr><th>Segment</th>"+hd+"</tr>"+a.by_segment.map(r=>`<tr><td>${sb(r.segment)}</td>${rw(r)}</tr>`).join("");
+ $("#clk-rank").innerHTML="<tr><th>Rank</th>"+hd+"</tr>"+a.by_rank.map(r=>`<tr><td>#${r.rank}</td>${rw(r)}</tr>`).join("");
+ $("#clk-class").innerHTML="<tr><th>Class</th><th>Clicks</th></tr>"+a.by_class.map(r=>`<tr><td><code>${esc(r.class)}</code></td><td>${r.n}</td></tr>`).join("");
+ $("#clk-recent").innerHTML="<tr><th>Time</th><th>Listing</th><th>Rank</th><th>Class</th></tr>"+a.recent.map(r=>`<tr><td>${t(r.at)}</td><td><code>${esc(r.listing_id)}</code>${r.tracked_only?' <span class="mut">tracking-only</span>':''}</td><td>#${r.rank}</td><td>${esc(r.class)}${r.paid?' <span class="badge g">paid</span>':''}</td></tr>`).join("");
+ $("#clk-lst").innerHTML="<tr><th>Listing</th><th>Segments</th><th>Avg rank</th>"+hd+"</tr>"+a.by_listing.map(r=>`<tr><td><b>${esc(r.name||"")}</b><br><code>${esc(r.listing_id)}</code></td><td>${(r.segments||"").split(",").map(sb).join(" ")}</td><td>${r.avg_rank}</td>${rw(r)}</tr>`).join("");}
+async function usage(){clickAnalytics().catch(e=>console.error(e));const ub=$("#u-bot").value;const u=await j("api/usage"+(ub?"?bot="+encodeURIComponent(ub):""));
  fillBots("#u-bot",u.by_bot.map(b=>b.bot_id));
  $("#bybot").innerHTML="<tr><th>Bot</th><th>Calls</th><th>Paid OK</th><th>402</th><th>Replays</th><th>Errors</th><th>Last</th></tr>"+u.by_bot.map(b=>`<tr class="click" onclick="$('#u-bot').value='${esc(b.bot_id)}';usage()"><td><code>${esc(b.bot_id)}</code></td><td>${b.calls}</td><td class="s2">${b.paid_ok}</td><td class="s4">${b.s402}</td><td>${b.replays}</td><td class="${b.errors?"s5":""}">${b.errors}</td><td>${t(b.last_at)}</td></tr>`).join("");
  const tot=u.by_route.reduce((a,r)=>a+r.n,0),f=k=>u.by_route.filter(k).reduce((a,r)=>a+r.n,0);

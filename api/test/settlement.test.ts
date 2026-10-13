@@ -58,7 +58,11 @@ test("setup advertiser with incentive offers", async () => {
 
 test("tokens bind only to the verified payer wallet, never X-Bot-Id", async () => {
   const r = await rec(null, { "X-Bot-Id": "pretender" });
-  assert.equal(r.status, 200); assert.deepEqual(r.click_links, []);
+  assert.equal(r.status, 200);
+  // every result still gets a tracked link, but unbound to any wallet and never payable
+  assert.equal(r.click_links.length, r.response.results.length);
+  assert.ok(r.click_links.every((c: any) => c.tracked_only && c.show_incentive_atomic + c.click_incentive_atomic === 0));
+  assert.equal((await pool.query("SELECT count(*)::int n FROM harvest_tokens WHERE request_id=$1 AND bot_wallet NOT LIKE 'unbound:%'", [r.request_id])).rows[0].n, 0);
   assert.equal((await pool.query("SELECT count(*)::int n FROM balance_ledger WHERE kind='incentive_escrow'")).rows[0].n, 0);
 });
 

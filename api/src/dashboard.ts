@@ -55,6 +55,31 @@ export function dashboardRouter() {
           max(at) AS last_at FROM api_log WHERE at > now() - $1 * interval '1 hour' GROUP BY 1 ORDER BY 2 DESC`, [hours]),
     });
   });
+  // Click analytics over EVERY tracked result link (organic / promoted / incentive). CTR = links with >=1 human
+  // click (class not bot/preview/self) / links issued. Window: ?hours (1..720, default 168).
+  r.get("/api/click-analytics", async (req, res) => {
+    const hours = Math.min(Math.max(Number(req.query.hours) || 168, 1), 720);
+    const base = `WITH t AS (
+        SELECT h.token, h.listing_id, h.rank, h.tracked_only, (h.show_atomic + h.click_atomic) > 0 AS incentive,
+               COALESCE(i.sponsored, false) AS sponsored,
+               CASE WHEN (h.show_atomic + h.click_atomic) > 0 THEN 'incentive' WHEN COALESCE(i.sponsored,false) THEN 'promoted' ELSE 'organic' END AS segment
+          FROM harvest_tokens h LEFT JOIN impressions i ON i.request_id = h.request_id AND i.rank = h.rank
+         WHERE h.issued_at > now() - $1 * interval '1 hour'),
+      c AS (SELECT token, count(*)::int AS clicks, count(*) FILTER (WHERE class NOT IN ('bot','preview','self'))::int AS human,
+                   count(*) FILTER (WHERE paid AND NOT clawed_back)::int AS paid FROM clicks GROUP BY 1)
+      SELECT %s, count(*)::int AS links, COALESCE(sum(c.clicks),0)::int AS clicks, COALESCE(sum(c.human),0)::int AS human_clicks,
+             COALESCE(sum(c.paid),0)::int AS paid_clicks, count(c.human) FILTER (WHERE c.human > 0)::int AS clicked_links,
+             round(100.0 * count(c.human) FILTER (WHERE c.human > 0) / NULLIF(count(*),0), 2)::float AS ctr_pct
+        FROM t LEFT JOIN c USING (token) %s`;
+    const by_segment = await q(base.replace("%s", "t.segment").replace("%s", "GROUP BY 1 ORDER BY 1"), [hours]);
+    const by_rank = await q(base.replace("%s", "t.rank").replace("%s", "GROUP BY 1 ORDER BY 1"), [hours]);
+    const by_listing = await q(base.replace("%s", "t.listing_id, (SELECT name FROM listings l WHERE l.listing_id=t.listing_id) AS name, string_agg(DISTINCT t.segment, ',') AS segments, round(avg(t.rank),2)::float AS avg_rank")
+      .replace("%s", "GROUP BY 1 ORDER BY 4 DESC, 3 DESC LIMIT 50"), [hours]);
+    const totals = (await q(base.replace("%s", "'all' AS scope").replace("%s", ""), [hours]))[0];
+    const by_class = await q(`SELECT c.class, count(*)::int AS n FROM clicks c JOIN harvest_tokens h USING (token) WHERE h.issued_at > now() - $1 * interval '1 hour' GROUP BY 1 ORDER BY 2 DESC`, [hours]);
+    const recent = await q(`SELECT c.at, c.class, c.paid, h.listing_id, h.rank, h.tracked_only, h.request_id FROM clicks c JOIN harvest_tokens h USING (token) ORDER BY c.at DESC LIMIT 20`);
+    res.json({ hours, totals, by_segment, by_rank, by_listing, by_class, recent });
+  });
   r.get("/api/payments", async (req, res) => {
     const pg = pageArgs(req.query);
     const pays = await q(`SELECT request_id, received_at, payer, payment_mode, payment_network, payment_amount_atomic::text AS amount_atomic,

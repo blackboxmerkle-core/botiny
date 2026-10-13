@@ -12,9 +12,9 @@ export class PgStore {
   constructor(db) { this.db = db; }
   q(sql, p) { return this.db.query(sql, p); }
   async putToken(t) {
-    await this.q(`INSERT INTO harvest_tokens(token,kid,result_id,set_id,request_id,rank,listing_id,provider_id,cluster_id,bot_wallet,channel,dest_url,dest_url_hash,show_atomic,click_atomic,issued_at,expires_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
-      [t.token, t.kid, t.result_id, t.set_id, t.request_id ?? null, t.rank, t.listing_id, t.provider_id, t.cluster_id, t.bot_wallet, t.channel, t.dest_url, t.dest_url_hash, t.show_atomic, t.click_atomic, ts(t.issued_at), ts(t.expires_at)]);
+    await this.q(`INSERT INTO harvest_tokens(token,kid,result_id,set_id,request_id,rank,listing_id,provider_id,cluster_id,bot_wallet,channel,dest_url,dest_url_hash,show_atomic,click_atomic,issued_at,expires_at,tracked_only)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+      [t.token, t.kid, t.result_id, t.set_id, t.request_id ?? null, t.rank, t.listing_id, t.provider_id, t.cluster_id, t.bot_wallet, t.channel, t.dest_url, t.dest_url_hash, t.show_atomic, t.click_atomic, ts(t.issued_at), ts(t.expires_at), !!t.tracked_only]);
   }
   async getToken(token) { return tokenRow((await this.q('SELECT * FROM harvest_tokens WHERE token=$1', [token])).rows[0]); }
   async putShortLink(l) {

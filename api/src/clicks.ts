@@ -23,10 +23,11 @@ export const CLICK_LEDGER_LOCK = 424244;
 const MARKET_LOCK = 424242;
 export const isWallet = (w: unknown): w is string => typeof w === "string" && /^0x[0-9a-fA-F]{40}$/.test(w);
 
-type Keys = { kid: string; privateKey: CryptoKey; publicKey: CryptoKey } | null;
+type Keys = { kid: string; privateKey: CryptoKey; publicKey: CryptoKey; tracking_only?: boolean } | null;
 let keysP: Promise<Keys> | null = null;
+let trackKeysP: Promise<NonNullable<Keys>> | null = null;
 /** Signing key: CLICK_SIGNING_KEY_JWK (Ed25519 private JWK, from the deploy secret store) + CLICK_KID.
- *  Without it, mock/test mode uses an ephemeral key; otherwise incentives are disabled (no links). */
+ *  Without it, mock/test mode uses an ephemeral key; otherwise incentives are disabled (see linkKeys). */
 export function clickKeys(): Promise<Keys> {
   return keysP ??= (async () => {
     const raw = process.env.CLICK_SIGNING_KEY_JWK;
@@ -42,7 +43,21 @@ export function clickKeys(): Promise<Keys> {
     return { kid: "ephemeral-" + Date.now(), privateKey: kp.privateKey, publicKey: kp.publicKey };
   })();
 }
-export function _resetClickKeys() { keysP = null; }
+/** Key used to sign result links. Every result gets a tracked link, so when no stable signing key is configured
+ *  in production we still issue links, signed by a per-process ephemeral key and flagged tracking_only: all
+ *  incentives are forced to 0 (no escrow, nothing payable), and their redirects keep working after a restart
+ *  because tracking-only rows resolve from the DB row (see ClickEngine.resolve). */
+export async function linkKeys(): Promise<NonNullable<Keys>> {
+  const k = await clickKeys(); if (k) return k;
+  return trackKeysP ??= (async () => {
+    const { generateKeyPair } = await load("token.js"); const kp = await generateKeyPair();
+    console.warn("click: CLICK_SIGNING_KEY_JWK not set -> tracking-only links (incentives disabled)");
+    return { kid: "track-" + Date.now(), privateKey: kp.privateKey, publicKey: kp.publicKey, tracking_only: true };
+  })();
+}
+/** Incentives can be switched off (links still issued, all zero) with CLICK_INCENTIVES=0. */
+export const incentivesEnabled = () => process.env.CLICK_INCENTIVES !== "0";
+export function _resetClickKeys() { keysP = null; trackKeysP = null; }
 // End-user key salt secret (daily-rotated inside the click server). Per-process random if unset.
 const KEY_SECRET = process.env.CLICK_KEY_SECRET ?? randomBytes(32).toString("hex");
 
@@ -64,7 +79,7 @@ async function verifyMessage(a: { address: string; message: string; signature: s
 
 /** Engine over Postgres (`db` = pool or a transaction client). */
 export async function pgEngine(db: { query: PoolClient["query"] }, settings?: Settings) {
-  const keys = await clickKeys();
+  const keys = await linkKeys();
   const { PgStore } = await load("pg-store.js");
   const { ClickEngine } = await load("engine.js");
   const cfg = await clickConfig(settings);
@@ -88,17 +103,20 @@ export async function issueClickLinks(client: PoolClient, a: {
   client_req?: { ip?: string; ua?: string; acceptLanguage?: string };
 }) {
   const none = { click_links: [] as any[], debited: [] as string[], config: null as any, kid: null as string | null, skipped: [] as string[] };
-  const keys = await clickKeys();
-  // Bind tokens ONLY to the verified x402 payer (never to X-Bot-Id): payouts go to that wallet.
-  if (!keys || !a.results.length || !isWallet(a.bot_wallet)) return none;
-  const wallet = a.bot_wallet.toLowerCase();
+  if (!a.results.length) return none;
+  const keys = await linkKeys();
+  // Bind tokens ONLY to the verified x402 payer (never to X-Bot-Id): payouts go to that wallet. A payer that is
+  // not a wallet still gets tracked links (usage analytics), but nothing payable.
+  const payable = isWallet(a.bot_wallet);
+  const wallet = payable ? a.bot_wallet!.toLowerCase() : "unbound:" + String(a.bot_wallet ?? "anonymous").slice(0, 80);
+  const incentives = payable && !keys.tracking_only && incentivesEnabled();
   const channel = a.channel && CHANNELS.has(a.channel) ? a.channel : "chat";
   const engine = await pgEngine(client, a.settings);
   const cfg = engine.cfg;
   const { buildResultSet } = await load("curation.js");
   const ids = a.results.map(r => r.listing_id);
   // offers pinned at market_seq; expired offers carry no incentive (expiry: explicit, else first offer + 30d)
-  const offers = new Map<string, { s: number; c: number; b: number | null }>((await client.query(
+  const offers = new Map<string, { s: number; c: number; b: number | null }>(!incentives ? [] : (await client.query(
     `SELECT * FROM (SELECT DISTINCT ON (o.listing_id) o.listing_id, o.show_atomic, o.click_atomic, o.budget_atomic,
             COALESCE(o.expires_at, (SELECT MIN(f.created_at) FROM incentive_offers f WHERE f.listing_id=o.listing_id) + interval '30 days') AS exp
        FROM incentive_offers o WHERE o.seq <= $1 AND o.listing_id = ANY($2) ORDER BY o.listing_id, o.seq DESC) x WHERE exp > now()`,
@@ -157,16 +175,18 @@ export async function issueClickLinks(client: PoolClient, a: {
     zero(skipped);
     if (iter === 7) { zero(new Set(ranked.map(r => r.cluster_id))); escrowed = new Map(); drawn = new Map(); }
   }
-  const set = await engine.issueSet({ set_id: a.request_id, request_id: a.request_id, bot_wallet: wallet, channel, ranked });
+  // trackAll: EVERY ranked result gets its own link; rows outside the incentive set are zero-incentive tracking links.
+  const set = await engine.issueSet({ set_id: a.request_id, request_id: a.request_id, bot_wallet: wallet, channel, ranked, trackAll: true, incentives });
   // the signed amounts must equal escrow + pool draws, per provider
   const signed = new Map<string, number>();
   for (const r of set.results) { const p = ranked.find(x => x.listing_id === r.listing_id)!.provider_id; const v = r.show_incentive_atomic + r.click_incentive_atomic; if (v) signed.set(p, (signed.get(p) ?? 0) + v); }
   for (const p of new Set([...signed.keys(), ...escrowed.keys(), ...drawn.keys()])) if ((signed.get(p) ?? 0) !== (escrowed.get(p) ?? 0) + (drawn.get(p) ?? 0)) throw new Error(`escrow mismatch for ${p}`);
-  if (a.client_req) await engine.noteBotApiCall(wallet, a.client_req);
+  if (a.client_req && payable) await engine.noteBotApiCall(wallet, a.client_req);
   const config = { fee_atomic: cfg.feeAtomic, line_item_cap_mult: cfg.lineItemCapMult, cluster_cap_mult: cfg.clusterCapMult, set_cap_mult: cfg.setCapMult,
-    max_slots_per_cluster: cfg.maxSlotsPerCluster, min_relevance: cfg.minRelevance, min_distinct_clusters: cfg.minDistinctClusters, channel, skipped: [...skipped], budget_capped: [...budgetCapped] };
+    max_slots_per_cluster: cfg.maxSlotsPerCluster, min_relevance: cfg.minRelevance, min_distinct_clusters: cfg.minDistinctClusters, channel, skipped: [...skipped], budget_capped: [...budgetCapped],
+    track_all: true, incentives, tracking_only_key: !!keys.tracking_only };
   const click_links = set.results.map((r: any) => ({ rank: r.rank, listing_id: r.listing_id, short_url: r.short_url, track_url: r.track_url, harvest_token: r.harvest_token,
-    show_incentive_atomic: r.show_incentive_atomic, click_incentive_atomic: r.click_incentive_atomic, disclosure: r.disclosure }));
+    show_incentive_atomic: r.show_incentive_atomic, click_incentive_atomic: r.click_incentive_atomic, disclosure: r.disclosure, tracked_only: r.tracked_only }));
   return { click_links, debited: [...escrowed.keys()], config, kid: keys.kid, skipped: [...skipped] };
 }
 
