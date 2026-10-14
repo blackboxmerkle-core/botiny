@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS feed_usage (
   at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS feed_usage_wallet ON feed_usage(wallet, at);
+-- repair: the live DB recorded an early draft of 0010 (applied by a supervisor restart mid-edit) without these columns; idempotent
+ALTER TABLE topup_pending ADD COLUMN IF NOT EXISTS target TEXT NOT NULL DEFAULT 'advertiser';
+ALTER TABLE topup_pending ALTER COLUMN advertiser_id DROP NOT NULL;
 ALTER TABLE topup_pending DROP CONSTRAINT IF EXISTS topup_pending_target_check;
 ALTER TABLE topup_pending ADD CONSTRAINT topup_pending_target_check CHECK ((target='advertiser' AND advertiser_id IS NOT NULL) OR (target IN ('search_credits','feed_basic','feed_pro') AND payer IS NOT NULL));
 INSERT INTO settings_versions(settings, note, changed_by)
