@@ -3,7 +3,11 @@ import { canonicalize, sha256 } from "./canonical";
 import { PACING_RULE, pacingAt } from "./pacing";
 export const RANKER_V1 = "cosine-ppm-v1;tiebreak=score_desc,listing_id_asc;exact-scan";
 export const RANKER_V2 = "promo-v2;qualify=score>=threshold;promo=score+bid_weight*bid,funded(fixed+bid),slots-first;organic=score_desc,listing_id_asc;exact-scan";
-export const RANKER_VERSION = "promo-v3;qualify=score>=threshold;promo=score+bid_weight*bid+pacing_boost,funded(fixed+bid),slots-first;organic=score_desc,listing_id_asc;exact-scan;" + PACING_RULE;
+export const RANKER_V3 = "promo-v3;qualify=score>=threshold;promo=score+bid_weight*bid+pacing_boost,funded(fixed+bid),slots-first;organic=score_desc,listing_id_asc;exact-scan;" + PACING_RULE;
+/** promo-v4 (default): higher sponsored relevance floor, <= sponsored_slots_max (1..2) labelled slots, sponsored ordered by relevance band
+ *  then bid then capped pacing boost; organic order untouched apart from the capped slots. */
+export const RANKER_V4 = "promo-v4;qualify=score>=threshold;sponsored=score>=sponsored_floor,funded(fixed+bid),slots<=min(sponsored_slots_max,promoted_slots,2),order=floor(score/band)_desc,bid_desc,pacing_boost_desc,score_desc,listing_id_asc;organic=score_desc,listing_id_asc;exact-scan;" + PACING_RULE;
+export const RANKER_VERSION = RANKER_V4;
 type Q = { query: (sql: string, params?: any[]) => Promise<{ rows: any[] }> };
 
 export interface RecommendInput { query: string; k: number; }
@@ -20,7 +24,9 @@ export function canonicalRequest(inp: RecommendInput, catalogue_seq: number, ext
 /** Pure, deterministic: given pinned inputs, produce the canonical response body. */
 export interface RankReq { query: string; k: number; catalogue_seq: number; embedding_model: string; ranker_version: string; market_seq?: number; settings_version?: number; pacing_at_ms?: number }
 export async function rank(db: Q, req: RankReq) {
-  if (req.ranker_version === RANKER_VERSION) return rankV2(db, req, true);
+  // dispatch strictly on the STORED version so old requests replay with the ranker that produced them
+  if (req.ranker_version === RANKER_V4) return rankV2(db, req, true, true);
+  if (req.ranker_version === RANKER_V3) return rankV2(db, req, true);
   if (req.ranker_version === RANKER_V2) return rankV2(db, req, false);
   return rankV1(db, req);
 }
@@ -44,7 +50,7 @@ const brief = (d: string) => d.length > 200 ? d.slice(0, 197) + "..." : d;
 
 /** v2: qualify by threshold, promote funded bidders into the first slots, then organic. Fully determined by
  *  (query, k, catalogue_seq, market_seq, settings_version, embedding_model, ranker_version). */
-async function rankV2(db: Q, req: RankReq, v3: boolean) {
+async function rankV2(db: Q, req: RankReq, v3: boolean, v4 = false) {
   if (v3 && !Number.isSafeInteger(req.pacing_at_ms)) throw new Error("v3 requires pacing_at_ms");
   if (req.embedding_model !== EMBEDDING_MODEL) throw new Error(`cannot replay: embedding ${req.embedding_model} unavailable`);
   if (req.market_seq === undefined || req.settings_version === undefined) throw new Error("v2 requires market_seq and settings_version");
@@ -62,14 +68,24 @@ async function rankV2(db: Q, req: RankReq, v3: boolean) {
   // v3: incentive offers behind their consumption schedule get a bounded pacing boost inside the promoted slots
   const pace = v3 ? await pacingAt(db, M, req.pacing_at_ms!, qualified.map(r => r.listing_id)) : new Map();
   const boostOf = (id: string) => pace.get(id)?.boost_ppm ?? 0;
-  const promoCands = qualified.filter(r => bal.has(r.provider_id) && ((bids.get(r.listing_id)?.bid ?? 0) > 0 || boostOf(r.listing_id) > 0))
-    .map(r => { const bid = Math.min(bids.get(r.listing_id)?.bid ?? 0, S.max_bid_atomic); const pacing_boost_ppm = boostOf(r.listing_id);
-      return { ...r, bid, pacing_boost_ppm, promo_score_ppm: r.score_ppm + S.bid_weight_ppm_per_atomic * bid + pacing_boost_ppm }; })
-    .sort((a, b) => b.promo_score_ppm - a.promo_score_ppm || byScore(a, b));
+  const funded = (r: any) => bal.has(r.provider_id) && ((bids.get(r.listing_id)?.bid ?? 0) > 0 || boostOf(r.listing_id) > 0);
+  const withBid = (r: any) => { const bid = Math.min(bids.get(r.listing_id)?.bid ?? 0, S.max_bid_atomic); const pacing_boost_ppm = boostOf(r.listing_id);
+    return { ...r, bid, pacing_boost_ppm, promo_score_ppm: r.score_ppm + S.bid_weight_ppm_per_atomic * bid + pacing_boost_ppm }; };
+  let promoCands: any[];
+  let slotCap = S.promoted_slots;
+  if (v4) {
+    // v4: relevance first. Bid only breaks ties within a relevance band; pacing boost is a further (capped) tiebreak.
+    const floor = Math.max(S.sponsored_floor_ppm, S.relevance_threshold_ppm), band = Math.max(1, S.relevance_band_ppm);
+    slotCap = Math.min(S.sponsored_slots_max, S.promoted_slots, 2);   // promoted_slots=0 still switches ads off
+    promoCands = qualified.filter(r => r.score_ppm >= floor && funded(r)).map(r => ({ ...withBid(r), band: Math.floor(r.score_ppm / band) }))
+      .sort((a, b) => b.band - a.band || b.bid - a.bid || b.pacing_boost_ppm - a.pacing_boost_ppm || byScore(a, b));
+  } else {
+    promoCands = qualified.filter(funded).map(withBid).sort((a, b) => b.promo_score_ppm - a.promo_score_ppm || byScore(a, b));
+  }
   const remaining = new Map(bal);
   const promoted: any[] = [];
   for (const c of promoCands) {
-    if (promoted.length >= Math.min(S.promoted_slots, req.k)) break;
+    if (promoted.length >= Math.min(slotCap, req.k)) break;
     const cost = S.fixed_cpi_atomic + c.bid;
     if ((remaining.get(c.provider_id) ?? 0) >= cost) { remaining.set(c.provider_id, remaining.get(c.provider_id)! - cost); promoted.push({ ...c, cost }); }
   }
@@ -83,7 +99,7 @@ async function rankV2(db: Q, req: RankReq, v3: boolean) {
     results: ordered.map((r, i) => ({
       rank: i + 1, listing_id: r.listing_id, name: r.name, description: brief(r.description), address: r.address, kind: r.kind,
       score_ppm: r.score_ppm, sponsored: r.sponsored,
-      ...(r.sponsored ? { label: "Sponsored", advertiser: r.provider_id, bid_atomic: r.bid, promo_score_ppm: r.promo_score_ppm, ...(r.pacing_boost_ppm ? { pacing_boost_ppm: r.pacing_boost_ppm } : {}) } : {}),
+      ...(r.sponsored ? { label: "Sponsored", advertiser: r.provider_id, bid_atomic: r.bid, ...(v4 ? { relevance_band: r.band } : { promo_score_ppm: r.promo_score_ppm }), ...(r.pacing_boost_ppm ? { pacing_boost_ppm: r.pacing_boost_ppm } : {}) } : {}),
     })),
   };
   const canonical = canonicalize(body);
