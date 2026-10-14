@@ -2,7 +2,7 @@ import express from "express";
 import { randomUUID } from "node:crypto";
 import { pool } from "./db";
 import { insertListing, validateListing } from "./listings";
-import { normalizeInput, rank, canonicalRequest, RANKER_VERSION } from "./rank";
+import { normalizeInput, rank, canonicalRequest, RANKER_VERSION, RecommendInput } from "./rank";
 import { EMBEDDING_MODEL } from "./embed";
 import { sha256 } from "./canonical";
 import { apiLogger, dashboardRouter } from "./dashboard";
@@ -49,6 +49,71 @@ export function limit(name: string, perIpMin: number, perWalletMin?: number): ex
   };
 }
 export const TOPUP_MIN = 1000, TOPUP_MAX = 100_000; // 0.001 .. 0.1 test USDC per top-up
+
+export interface SearchExec { request_id: string; inp: RecommendInput; settings_version: number; settings: any; pay: any; tos: any; credit: { wallet: string } | null; price: bigint;
+  bot_id: string | null; channel?: string; client_req: { ip: string; ua: string; acceptLanguage: string } }
+/** The single search transaction (serialized by MARKET_LOCK) shared by POST /v1/recommend and the MCP server: pin catalogue/market/
+ *  settings, rank, log request + hash + impressions, debit credits (credit path) and advertisers, issue click links, assert no
+ *  negative balance. Throws {insufficientCredit} if the credit balance raced below the price, pg 23505 on payment reuse. */
+export async function executeSearch(o: SearchExec): Promise<{ out: any; click_links: any[]; creditAfter: number | null }> {
+  const { request_id, inp, settings_version, settings, pay, tos, credit, price } = o;
+  let creditAfter: number | null = null;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN ISOLATION LEVEL READ COMMITTED");
+    await client.query("SELECT pg_advisory_xact_lock($1)", [MARKET_LOCK]);
+    const seq = Number((await client.query("SELECT COALESCE(MAX(seq),0) AS s FROM listings")).rows[0].s);
+    const mseq = await marketSeq(client);
+    const pacing_at_ms = Date.now();
+    const reqCanon = canonicalRequest(inp, seq, { market_seq: mseq, settings_version, pacing_at_ms });
+    const out = await rank(client, { ...inp, catalogue_seq: seq, market_seq: mseq, settings_version, pacing_at_ms, embedding_model: EMBEDDING_MODEL, ranker_version: RANKER_VERSION });
+    await client.query(
+      `INSERT INTO requests(request_id,catalogue_seq,embedding_model,ranker_version,request_canonical,request_hash,
+       response_canonical,response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_ref,bot_id,settings_version,market_seq,
+       payment_chain_id,settle_via,tos_version,tos_hash,tos_proof,pay_to,payment_valid_before,payment_status,payment_method)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
+      [request_id, seq, EMBEDDING_MODEL, RANKER_VERSION, reqCanon, sha256(reqCanon), out.canonical, out.hash,
+       pay.payer, pay.mode, pay.network, pay.amount.toString(), pay.ref, o.bot_id, settings_version, mseq,
+       pay.chainId, pay.settle_via, tos.tos_version, tos.tos_hash, tos.proof, pay.payTo,
+       pay.mode === "x402" ? Number((pay as any).payload?.payload?.authorization?.validBefore ?? 0) || null : null,   // always stored (needed to ever compensate)
+       credit ? "settled" : "verified", credit ? "credits" : "per_query"]);
+    if (credit) {   // atomic debit in the same transaction as the request log + impressions
+      const d = await debitForQuery(client, credit.wallet, Number(price), request_id);
+      if (!d) throw Object.assign(new Error("insufficient credit"), { insufficientCredit: true });
+      creditAfter = d.balance_atomic;
+    }
+    await reserveNonce(client, pay);   // same tx: replayed EIP-3009 nonce => 23505 => 409
+    const debited: string[] = [];
+    for (let i = 0; i < out.meta.length; i++) {
+      const m = out.meta[i];
+      await client.query(`INSERT INTO impressions(request_id,rank,listing_id,provider_id,charge_micro_usdc,sponsored,fixed_atomic,bid_atomic) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [request_id, i + 1, m.listing_id, m.provider_id, m.cpi, m.sponsored, m.fixed, m.bid]);
+      if (m.sponsored && m.cpi > 0) {
+      await client.query(`INSERT INTO balance_ledger(advertiser_id,delta_atomic,kind,request_id,listing_id,note) VALUES ($1,$2,'impression_debit',$3,$4,$5)`,
+        [m.provider_id, -m.cpi, request_id, m.listing_id, `fixed ${m.fixed} + bid ${m.bid}`]);
+      debited.push(m.provider_id);
+      }
+    }
+    // click-server: signed per-result links + incentive escrow, same transaction; kept out of response_hash
+    const cl = await issueClickLinks(client, { request_id, bot_wallet: pay.payer, channel: o.channel,
+      client_req: o.client_req,
+      market_seq: mseq, settings: out.settings ?? settings, results: out.body.results, providers: out.meta.map((m: any) => m.provider_id) });
+    const click_links = cl.click_links;
+    debited.push(...cl.debited);
+    if (cl.kid) await client.query("UPDATE requests SET click_kid=$2, click_config=$3 WHERE request_id=$1", [request_id, cl.kid, cl.config]);
+    if ((out as any).pacing && Object.keys((out as any).pacing).length) await client.query("UPDATE requests SET pacing=$2 WHERE request_id=$1", [request_id, (out as any).pacing]);
+    await assertNonNegative(client, debited);
+    if (process.env.FAIL_AFTER_IMPRESSIONS === "1") throw new Error("injected failure");
+    await client.query("COMMIT");
+    return { out, click_links, creditAfter };
+  } catch (e) { await client.query("ROLLBACK").catch(() => {}); throw e; } finally { client.release(); }
+}
+/** Credit-path pay/tos descriptors (credit searches inherit the ToS accepted, nonce-bound, at the wallet's latest top-up). */
+export async function creditPay(wallet: string, price: bigint, request_id: string) {
+  const t = await latestTopupTos(pool, wallet);
+  return { tos: { tos_version: t?.tos_version ?? null, tos_hash: t?.tos_hash ?? null, proof: t?.tos_proof ?? null },
+    pay: { mode: "credits", payer: wallet, network: "credits", amount: price, ref: "credits:" + request_id, chainId: null, settle_via: "credits", payTo: null } };
+}
 
 export function createApp() {
   const app = express();
@@ -105,9 +170,7 @@ export function createApp() {
     }
     let pay: any, tos: any;
     if (credit) {
-      const t = await latestTopupTos(pool, credit.wallet);   // credit searches inherit the ToS accepted (nonce-bound) at top-up
-      tos = { tos_version: t?.tos_version ?? null, tos_hash: t?.tos_hash ?? null, proof: t?.tos_proof ?? null };
-      pay = { mode: "credits", payer: credit.wallet, network: "credits", amount: price, ref: "credits:" + request_id, chainId: null, settle_via: "credits", payTo: null };
+      ({ pay, tos } = await creditPay(credit.wallet, price, request_id));
     } else {
       const g = await paymentGate(req, res, "bot", "/v1/recommend", req.body, price, "Ranked bot-service recommendations", creditShort);
       if (!g) return;
@@ -115,68 +178,19 @@ export function createApp() {
     }
     let creditAfter: number | null = null;
 
-    // ONE transaction (serialized by MARKET_LOCK): pin catalogue/market/settings, rank, log request + hash +
-    // impressions, debit advertisers for sponsored impressions, assert no negative balance.
-    const client = await pool.connect();
     res.locals.request_id = request_id;
-    let out;
-    let released = false;
-    let click_links: any[] = [];
+    let out: any, click_links: any[] = [];
     try {
-      await client.query("BEGIN ISOLATION LEVEL READ COMMITTED");
-      await client.query("SELECT pg_advisory_xact_lock($1)", [MARKET_LOCK]);
-      const seq = Number((await client.query("SELECT COALESCE(MAX(seq),0) AS s FROM listings")).rows[0].s);
-      const mseq = await marketSeq(client);
-      const pacing_at_ms = Date.now();
-      const reqCanon = canonicalRequest(inp, seq, { market_seq: mseq, settings_version, pacing_at_ms });
-      out = await rank(client, { ...inp, catalogue_seq: seq, market_seq: mseq, settings_version, pacing_at_ms, embedding_model: EMBEDDING_MODEL, ranker_version: RANKER_VERSION });
-      await client.query(
-        `INSERT INTO requests(request_id,catalogue_seq,embedding_model,ranker_version,request_canonical,request_hash,
-           response_canonical,response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_ref,bot_id,settings_version,market_seq,
-           payment_chain_id,settle_via,tos_version,tos_hash,tos_proof,pay_to,payment_valid_before,payment_status,payment_method)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
-        [request_id, seq, EMBEDDING_MODEL, RANKER_VERSION, reqCanon, sha256(reqCanon), out.canonical, out.hash,
-         pay.payer, pay.mode, pay.network, pay.amount.toString(), pay.ref, botId(req), settings_version, mseq,
-         pay.chainId, pay.settle_via, tos.tos_version, tos.tos_hash, tos.proof, pay.payTo,
-         pay.mode === "x402" ? Number((pay as any).payload?.payload?.authorization?.validBefore ?? 0) || null : null,   // always stored (needed to ever compensate)
-         credit ? "settled" : "verified", credit ? "credits" : "per_query"]);
-      if (credit) {   // atomic debit in the same transaction as the request log + impressions
-        const d = await debitForQuery(client, credit.wallet, Number(price), request_id);
-        if (!d) throw Object.assign(new Error("insufficient credit"), { insufficientCredit: true });
-        creditAfter = d.balance_atomic;
-      }
-      await reserveNonce(client, pay);   // same tx: replayed EIP-3009 nonce => 23505 => 409
-      const debited: string[] = [];
-      for (let i = 0; i < out.meta.length; i++) {
-        const m = out.meta[i];
-        await client.query(`INSERT INTO impressions(request_id,rank,listing_id,provider_id,charge_micro_usdc,sponsored,fixed_atomic,bid_atomic) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [request_id, i + 1, m.listing_id, m.provider_id, m.cpi, m.sponsored, m.fixed, m.bid]);
-        if (m.sponsored && m.cpi > 0) {
-          await client.query(`INSERT INTO balance_ledger(advertiser_id,delta_atomic,kind,request_id,listing_id,note) VALUES ($1,$2,'impression_debit',$3,$4,$5)`,
-            [m.provider_id, -m.cpi, request_id, m.listing_id, `fixed ${m.fixed} + bid ${m.bid}`]);
-          debited.push(m.provider_id);
-        }
-      }
-      // click-server: signed per-result links + incentive escrow, same transaction; kept out of response_hash
-      const cl = await issueClickLinks(client, { request_id, bot_wallet: pay.payer, channel: req.get("X-Bot-Channel"),
-        client_req: { ip: clientIp(req), ua: req.get("user-agent") ?? "", acceptLanguage: req.get("accept-language") ?? "" },
-        market_seq: mseq, settings: out.settings ?? settings, results: out.body.results, providers: out.meta.map((m: any) => m.provider_id) });
-      click_links = cl.click_links;
-      debited.push(...cl.debited);
-      if (cl.kid) await client.query("UPDATE requests SET click_kid=$2, click_config=$3 WHERE request_id=$1", [request_id, cl.kid, cl.config]);
-      if ((out as any).pacing && Object.keys((out as any).pacing).length) await client.query("UPDATE requests SET pacing=$2 WHERE request_id=$1", [request_id, (out as any).pacing]);
-      await assertNonNegative(client, debited);
-      if (process.env.FAIL_AFTER_IMPRESSIONS === "1") throw new Error("injected failure");
-      await client.query("COMMIT");
+      ({ out, click_links, creditAfter } = await executeSearch({ request_id, inp, settings_version, settings, pay, tos, credit, price, bot_id: botId(req), channel: req.get("X-Bot-Channel"),
+        client_req: { ip: clientIp(req), ua: req.get("user-agent") ?? "", acceptLanguage: req.get("accept-language") ?? "" } }));
     } catch (e: any) {
-      await client.query("ROLLBACK").catch(() => {});
       res.locals.error = String(e?.message ?? e);
-      if (e?.insufficientCredit) { client.release(); released = true;   // raced to zero: same 402 as an unpaid request
-        await paymentGate(req, res, "bot", "/v1/recommend", req.body, price, "Ranked bot-service recommendations", { credits: { balance_atomic: await creditBalance(pool, credit!.wallet), required_atomic: Number(price), topup: "/v1/credits/topup" } }, true); return; }
+      if (e?.insufficientCredit)   // raced to zero: same 402 as an unpaid request
+        return void await paymentGate(req, res, "bot", "/v1/recommend", req.body, price, "Ranked bot-service recommendations", { credits: { balance_atomic: await creditBalance(pool, credit!.wallet), required_atomic: Number(price), topup: "/v1/credits/topup" } }, true);
       if (e?.code === "23505") return res.status(409).json({ error: "payment already used" });
       console.error("recommend", request_id, e?.stack ?? e);
       return res.status(500).json({ error: "internal_error", message: "internal error", request_id });
-    } finally { if (!released) client.release(); }
+    }
     if (credit) return res.json({ request_id, response_hash: out.hash, response: out.body, click_links,
       payment: { method: "credits", debited_atomic: Number(price), credit_balance_atomic: creditAfter, queries_remaining: Math.floor(creditAfter! / Number(price)) },
       tos: { version: tos.tos_version, sha256: tos.tos_hash, proof: tos.proof } });
@@ -373,6 +387,10 @@ export function createApp() {
       res.json({ advertiser_id: res.locals.adv, credited_atomic: amt, settle_tx: s.tx, mode: pay.mode, network: pay.network, settle_via: s.via, tos: { version: tos.tos_version, sha256: tos.tos_hash }, ...c });
     } catch (e) { fail(res, e); }
   });
+  // ---------- MCP server (streamable HTTP, stateless JSON) ----------
+  app.post("/mcp", banGuard(), limit("mcp", 600), async (req, res, next) => { try { (await import("./mcp")).mcpHandler(publicBase)(req, res, next); } catch (e) { next(e); } });
+  app.get("/mcp", (_req, res) => { res.set("Allow", "POST").status(405).json({ error: "method_not_allowed", message: "this MCP endpoint is stateless: POST JSON-RPC messages (no SSE stream)" }); });
+  app.delete("/mcp", (_req, res) => { res.set("Allow", "POST").status(405).json({ error: "method_not_allowed", message: "no sessions to terminate" }); });
   // ---------- Prepaid search credits (searcher bots) ----------
   // Top-up: one x402 payment of settings.credit_pack_price_atomic (ToS bound into the nonce, bans apply). Credited only after
   // settlement. First top-up (or ?rotate_key=1) returns an API key bound to the payer wallet, shown once. No refunds.
@@ -413,6 +431,73 @@ export function createApp() {
     if (!a) return res.status(401).json({ error: "credit_key_required", message: "send Authorization: Bearer <search-credit API key>" });
     res.json(await creditSummary(a.wallet, (await currentSettings()).settings.query_price_atomic));
   });
+  // ---------- Data feed (bulk catalogue access; monthly API-key tiers bought via x402) ----------
+  app.get("/v1/feed/tiers", async (_req, res) => { const { tierOf, TIERS, PERIOD_DAYS } = await import("./feed"); const { settings: S } = await currentSettings();
+    res.json({ tiers: TIERS.map(t => ({ ...tierOf(S, t), tos_params: { tier: t, price_atomic: tierOf(S, t).price_atomic }, subscribe: `POST /v1/feed/subscribe?tier=${t}` })), period_days: PERIOD_DAYS,
+      endpoints: { export: "GET /v1/feed/listings?cursor=&limit=", changes: "GET /v1/feed/changes?since=<seq>&limit=", me: "GET /v1/feed/me" }, auth: "Authorization: Bearer bfk_...", refunds: "none" }); });
+  app.post("/v1/feed/subscribe", banGuard(), limit("feed_subscribe", 30, 10), async (req, res) => {
+    const F = await import("./feed");
+    const tier = String(req.query.tier ?? req.body?.tier ?? "") as any;
+    if (!F.TIERS.includes(tier)) return res.status(400).json({ error: "validation", message: `tier must be one of ${F.TIERS.join(", ")}` });
+    const { version, settings: S } = await currentSettings();
+    const T = F.tierOf(S, tier), rotate = req.query.rotate_key === "1" || req.body?.rotate_key === true;
+    const g = await paymentGate(req, res, "bot", "/v1/feed/subscribe", { tier, price_atomic: T.price_atomic }, BigInt(T.price_atomic), `Botiny data feed: ${tier} tier, ${T.monthly_quota} requests / ${T.period_days} days`);
+    if (!g) return;
+    const { pay, tos } = g;
+    if (!/^0x[0-9a-fA-F]{40}$/.test(pay.payer) && pay.payer !== "0xmock") return res.status(400).json({ error: "payer wallet required" });
+    if ((await pool.query("SELECT 1 FROM feed_periods WHERE payment_ref=$1", [pay.ref])).rows.length) return res.status(409).json({ error: "payment already used" });
+    try { await reserveNonce(pool, pay); } catch (e: any) { if (e?.code === "23505") return res.status(409).json({ error: "payment already used (nonce)" }); throw e; }
+    const s = await settlePayment(pay).catch((e: any) => ({ ok: false, ambiguous: true, error: "exception: " + String(e?.message ?? e).slice(0, 480) } as any));
+    const meta = { payment_network: pay.network, payment_chain_id: pay.chainId, settle_via: s.via, tos_version: tos.tos_version, tos_hash: tos.tos_hash, tos_proof: tos.proof, pay_to: pay.payTo, price_atomic: T.price_atomic, settings_version: version };
+    if (!s.ok && s.ambiguous) {
+      console.error("feed subscribe settle_unknown", s.error);
+      await pool.query(`INSERT INTO topup_pending(payment_ref,target,advertiser_id,amount_atomic,chain_id,payer,nonce,valid_before,mode,settle_tx,settle_via,credit_meta,last_error)
+          VALUES ($1,$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (payment_ref) DO NOTHING`,
+        [pay.ref, "feed_" + tier, T.price_atomic, pay.chainId ?? null, pay.payer.toLowerCase(), (pay as any).nonce ?? null, Number((pay as any).payload?.payload?.authorization?.validBefore ?? 0) || null, pay.mode, s.tx ?? null, s.via ?? null, meta, String(s.error ?? "").slice(0, 300)]);
+      return res.status(202).json({ state: "settle_unknown", message: "Settlement outcome unknown; reconciled on-chain and the month is granted automatically if it settled (subscribe again with rotate_key=1 to obtain a key if this was your first purchase)." });
+    }
+    if (!s.ok) { res.locals.error = "settlement failed: " + (s.error ?? "unknown"); return res.status(402).json({ error: "settlement_failed", message: "Payment settlement failed; nothing granted and you were not charged." }); }
+    if (s.header) res.set("X-PAYMENT-RESPONSE", s.header);
+    try {
+      const r = await F.grantPeriod(pay.payer, tier, S, version, { ...meta, payment_ref: pay.ref, settle_tx: s.tx ?? null }, rotate);
+      res.json({ wallet: r.wallet, tier, paid_atomic: T.price_atomic, period: r.period,
+        ...(r.api_key ? { api_key: r.api_key, api_key_note: "shown once; send as Authorization: Bearer <key> to /v1/feed/*" } : { api_key: null, api_key_note: "existing key unchanged (rotate_key=1 issues a new one)" }),
+        settle_tx: s.tx ?? null, network: pay.network, settle_via: s.via, tos: { version: tos.tos_version, sha256: tos.tos_hash }, refunds: "none" });
+    } catch (e) { fail(res, e); }
+  });
+  const feedAuth: express.RequestHandler = async (req, res, next) => {
+    const F = await import("./feed");
+    const m = /^Bearer (bfk_\S+)$/.exec(req.get("authorization") ?? "");
+    const a = m ? await F.feedAccountByKey(m[1]) : null;
+    if (!a) return res.status(401).json({ error: "feed_key_required", message: "send Authorization: Bearer <data-feed key>; buy a tier via x402 at POST /v1/feed/subscribe (see GET /v1/feed/tiers)" });
+    const ban = (await activeBans()).find((b: any) => b.kind === "wallet" && b.value === a.wallet);
+    if (ban) return res.status(403).json({ error: "forbidden: banned", ban: { id: ban.ban_id, kind: ban.kind, reason: ban.reason } });
+    if (!rlExempt(req)) try { rateLimit(`feed:wallet:${a.wallet}`, Number(process.env.RL_FEED_WALLET ?? 120), 60_000); }
+      catch (e: any) { await F.logUsage({ wallet: a.wallet, endpoint: req.path.split("/").pop()!, status: 429, ip: clientIp(req) }); if (e?.retryAfter) res.set("Retry-After", String(e.retryAfter)); return res.status(429).json({ error: "rate_limited", message: `too many feed requests; retry after ${e?.retryAfter ?? 60}s` }); }
+    res.locals.feedWallet = a.wallet; next();
+  };
+  const feedServe = (endpoint: "listings" | "changes") => async (req: express.Request, res: express.Response) => {
+    const F = await import("./feed");
+    const w = res.locals.feedWallet as string;
+    const cursorIn = endpoint === "listings" ? (typeof req.query.cursor === "string" ? req.query.cursor : null) : String(req.query.since ?? "0");
+    if (endpoint === "listings" && cursorIn && !F.decodeCursor(cursorIn)) return res.status(400).json({ error: "validation", message: "invalid cursor" });
+    if (endpoint === "changes" && !/^\d{1,15}$/.test(cursorIn!)) return res.status(400).json({ error: "validation", message: "since must be a non-negative integer seq" });
+    const q = await F.consumeQuota(w);
+    if (!q) { await F.logUsage({ wallet: w, endpoint, status: 402, cursor_in: cursorIn, ip: clientIp(req) });
+      return res.status(402).json({ error: "feed_quota_exhausted", message: "no active data-feed month with quota left; buy one via x402 at POST /v1/feed/subscribe?tier=basic|pro (no refunds)", subscribe: "/v1/feed/subscribe", tiers: "/v1/feed/tiers" }); }
+    const lim = Math.min(Math.max(1, Number(req.query.limit ?? q.max_page) | 0 || q.max_page), q.max_page);
+    try {
+      const page = endpoint === "listings" ? await F.exportPage(cursorIn, lim) : await F.changesPage(Number(cursorIn), lim);
+      const items = endpoint === "listings" ? (page as any).items.length : (page as any).changes.length;
+      await F.logUsage({ wallet: w, period_id: q.period_id, endpoint, status: 200, cursor_in: cursorIn, cursor_out: endpoint === "listings" ? (page as any).next_cursor : String((page as any).next_since), items,
+        catalogue_seq: endpoint === "listings" ? (page as any).catalogue_seq : (page as any).head_seq, ip: clientIp(req) });
+      res.set("X-Feed-Quota-Remaining", String(q.quota - q.used));
+      res.json({ ...page, limit: lim, quota: { tier: q.tier, used: q.used, remaining: q.quota - q.used, period_ends_at: q.ends_at } });
+    } catch (e) { fail(res, e); }   // quota already consumed: no refunds (validated inputs above make this an internal error only)
+  };
+  app.get("/v1/feed/listings", limit("feed", 600), feedAuth, feedServe("listings"));
+  app.get("/v1/feed/changes", limit("feed", 600), feedAuth, feedServe("changes"));
+  app.get("/v1/feed/me", limit("feed", 600), feedAuth, async (_req, res) => res.json(await (await import("./feed")).feedSummary(res.locals.feedWallet)));
   app.use((req, res) => { res.status(404).json({ error: "not_found", message: `no route ${req.method} ${req.path}` }); });
   app.use((e: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const status = e?.status ?? e?.statusCode ?? 500; res.locals.error = String(e?.message ?? e);
