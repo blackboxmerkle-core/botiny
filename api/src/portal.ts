@@ -397,7 +397,11 @@ export function portalRouter() {
     for (const b of bots) out.push({ bot_id: b.bot_id, path_id: b.bot_id ?? NONE, ...b, spend_30d_atomic: Number(b.spend_30d_atomic), incentives_earned_atomic: earned.get(b.bot_id) ?? 0, ban: await banState(b.bot_id, b.paying_wallets) });
     const sum = (k: string) => out.reduce((a, x: any) => a + Number(x[k] ?? 0), 0);
     res.json({ address: s.address, wallets: W, asset: "USDC (testnet, 6 decimals)", bots: out,
-      totals: { queries_30d: sum("queries_30d"), spend_30d_atomic: sum("spend_30d_atomic"), incentives_earned_atomic: sum("incentives_earned_atomic") }, daily });
+      totals: { queries_30d: sum("queries_30d"), spend_30d_atomic: sum("spend_30d_atomic"), incentives_earned_atomic: sum("incentives_earned_atomic") }, daily,
+      // prepaid search credits per owned wallet (balances + usage; keys are never shown here)
+      credits: await q(`SELECT a.wallet, COALESCE(SUM(l.delta_atomic),0)::float8 balance_atomic, COALESCE(-SUM(l.delta_atomic) FILTER (WHERE l.kind='query_debit'),0)::float8 spent_atomic,
+          COUNT(l.*) FILTER (WHERE l.kind='query_debit')::int credit_queries, MAX(l.created_at) FILTER (WHERE l.kind='query_debit') last_query_at
+        FROM search_credit_accounts a LEFT JOIN search_credit_ledger l USING (wallet) WHERE a.wallet = ANY($1) GROUP BY 1 ORDER BY 1`, [W]) });
   }));
   r.post("/v1/bots/me/wallets", requireSession(), h(async (req, res) => {
     const s: Session = res.locals.session;

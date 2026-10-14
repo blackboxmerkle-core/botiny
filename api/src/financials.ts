@@ -10,7 +10,12 @@ const LEDGER = `
   SELECT r.received_at AS at, 'bot_query_payment' AS type, r.payment_status AS status, r.payment_mode AS mode,
          r.payer AS counterparty, r.payment_amount_atomic AS amount_atomic, r.request_id, r.settle_tx, NULL::text AS listing_id,
          NULL::int AS rank, NULL::text AS kind, r.bot_id, r.payment_network AS network, r.settle_via, r.tos_version
-    FROM requests r
+    FROM requests r WHERE r.payment_method='per_query'   -- credit-debited queries are prepaid: the cash is the bot_credit_topup row
+  UNION ALL
+  SELECT c.created_at, CASE c.kind WHEN 'topup_x402' THEN 'bot_credit_topup' ELSE 'bot_credit_admin' END, CASE c.kind WHEN 'topup_x402' THEN 'settled' ELSE 'credited' END,
+         CASE c.kind WHEN 'topup_x402' THEN COALESCE(NULLIF(c.note,''),'x402') ELSE 'offchain' END, c.wallet, c.delta_atomic, NULL, c.settle_tx, NULL, NULL, NULL, NULL,
+         c.payment_network, c.settle_via, c.tos_version
+    FROM search_credit_ledger c WHERE c.kind IN ('topup_x402','admin_credit')
   UNION ALL
   SELECT b.created_at, CASE b.kind WHEN 'topup_x402' THEN 'advertiser_topup' ELSE 'advertiser_admin_credit' END,
          CASE b.kind WHEN 'topup_x402' THEN 'settled' ELSE 'credited' END,
@@ -45,7 +50,8 @@ export function financialsRouter() {
   const r = express.Router();
   r.get("/api/financials", async (req, res) => {
     const settled = await q(`SELECT settle_tx AS tx, payment_network AS network FROM requests WHERE payment_mode='x402' AND payment_status='settled' AND settle_tx IS NOT NULL
-      UNION SELECT settle_tx, COALESCE(payment_network,'base-sepolia') FROM balance_ledger WHERE kind='topup_x402' AND note='x402' AND settle_tx IS NOT NULL`);
+      UNION SELECT settle_tx, COALESCE(payment_network,'base-sepolia') FROM balance_ledger WHERE kind='topup_x402' AND note='x402' AND settle_tx IS NOT NULL
+      UNION SELECT settle_tx, payment_network FROM search_credit_ledger WHERE kind='topup_x402' AND note='x402' AND settle_tx IS NOT NULL`);
     const chain = await chainView(settled);
     const rows = await ledger(req.query);
     for (const x of rows) {
@@ -65,6 +71,7 @@ export function financialsRouter() {
         coalesce(sum(amount_atomic) FILTER (WHERE type='bot_query_payment' AND mode='x402' AND status='settled'),0)::text AS query_settled_onchain,
         coalesce(sum(amount_atomic) FILTER (WHERE type='advertiser_impression_charge'),0)::text AS ad_fees,
         count(*) FILTER (WHERE type='advertiser_impression_charge')::int AS charged_impressions,
+        coalesce(sum(amount_atomic) FILTER (WHERE type='bot_credit_topup' AND status='settled'),0)::text AS credit_topups_settled,
         coalesce(sum(amount_atomic) FILTER (WHERE type='advertiser_topup' AND mode='x402'),0)::text AS topups_onchain,
         coalesce(sum(amount_atomic) FILTER (WHERE type='advertiser_topup' AND mode<>'x402'),0)::text AS topups_mock,
         coalesce(sum(amount_atomic) FILTER (WHERE type='advertiser_admin_credit'),0)::text AS admin_credits

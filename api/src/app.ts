@@ -19,6 +19,8 @@ import { portalRouter, suggestionsAdminRouter, sessionAdvertiser, sessionOf, lis
 import { payerFromHeader } from "./bans";
 import { recordSettlement } from "./reconcile";
 import { replayRow } from "./replay";
+import { creditAccountByKey, creditBalance, creditTopup, debitForQuery, latestTopupTos, creditSummary } from "./credits";
+import { activeBans } from "./bans";
 import { issueClickLinks, pgEngine, scoreClick, settleIncentives, clawbackClick, clearReview, earnings, clickKeys } from "./clicks";
 
 export const botId = (req: express.Request) => { const b = req.get("X-Bot-Id"); return b && /^[A-Za-z0-9._:-]{1,64}$/.test(b) ? b : null; };
@@ -29,6 +31,7 @@ export const redactPayer = (p: string | null) => !p ? null : /^0x[0-9a-fA-F]{40}
 /** Per-IP / per-wallet fixed-window limits (in-process). Generous defaults so sim bots never hit them; env-tunable
  *  (RL_<NAME>_IP / RL_<NAME>_WALLET per minute). Direct loopback clients (local scripts, supervise health checks) are
  *  exempt unless RL_EXEMPT_LOOPBACK=0; ngrok traffic carries the real client IP (trust proxy = loopback). */
+const rlExempt = (req: express.Request) => { const peer = String(req.socket.remoteAddress ?? "").replace(/^::ffff:/, ""); return process.env.RL_EXEMPT_LOOPBACK !== "0" && /^(127\.|::1$)/.test(peer) && req.get("x-forwarded-for") == null; };
 export function limit(name: string, perIpMin: number, perWalletMin?: number): express.RequestHandler {
   return (req, res, next) => {
     const ip = clientIp(req);
@@ -84,16 +87,40 @@ export function createApp() {
     if (typeof inp === "string") return res.status(400).json({ error: inp });
     const { version: settings_version, settings } = await currentSettings();   // price + ranking rules pinned here
     const price = BigInt(settings.query_price_atomic);
-    const g = await paymentGate(req, res, "bot", "/v1/recommend", req.body, price, "Ranked bot-service recommendations");
-    if (!g) return;
-    const { pay, tos } = g;
+    const request_id = "req_" + randomUUID();
+    // Prepaid search credits: Authorization: Bearer bck_... (key bound to the payer wallet of its top-up). Without enough
+    // credit (or with an explicit X-PAYMENT) the normal per-query x402 flow applies, so pay-per-query stays the fallback.
+    let credit: { wallet: string; balance_atomic: number } | null = null, creditShort: any = null;
+    const ck = /^Bearer (bck_\S+)$/.exec(req.get("authorization") ?? "");
+    if (ck) {
+      const acct = await creditAccountByKey(ck[1]);
+      if (!acct) return res.status(401).json({ error: "credit_key_invalid", message: "unknown or revoked search-credit API key" });
+      const ban = (await activeBans()).find((b: any) => b.kind === "wallet" && b.value === acct.wallet);
+      if (ban) { res.locals.error = "banned (wallet)"; return res.status(403).json({ error: "forbidden: banned", ban: { id: ban.ban_id, kind: ban.kind, reason: ban.reason, expires_at: ban.expires_at } }); }
+      if (!rlExempt(req)) try { rateLimit(`recommend:wallet:${acct.wallet}`, Number(process.env.RL_RECOMMEND_WALLET ?? 300), 60_000); }
+        catch (e: any) { if (e?.retryAfter) res.set("Retry-After", String(e.retryAfter)); return res.status(429).json({ error: "rate_limited", message: `too many recommend requests; retry after ${e?.retryAfter ?? 60}s` }); }
+      const bal = await creditBalance(pool, acct.wallet);
+      if (bal >= Number(price) && !req.get("X-PAYMENT")) credit = { wallet: acct.wallet, balance_atomic: bal };
+      else creditShort = { credits: { balance_atomic: bal, required_atomic: Number(price), topup: "/v1/credits/topup", message: "insufficient search credit: pay this query with x402 (accepts) or top up" } };
+    }
+    let pay: any, tos: any;
+    if (credit) {
+      const t = await latestTopupTos(pool, credit.wallet);   // credit searches inherit the ToS accepted (nonce-bound) at top-up
+      tos = { tos_version: t?.tos_version ?? null, tos_hash: t?.tos_hash ?? null, proof: t?.tos_proof ?? null };
+      pay = { mode: "credits", payer: credit.wallet, network: "credits", amount: price, ref: "credits:" + request_id, chainId: null, settle_via: "credits", payTo: null };
+    } else {
+      const g = await paymentGate(req, res, "bot", "/v1/recommend", req.body, price, "Ranked bot-service recommendations", creditShort);
+      if (!g) return;
+      ({ pay, tos } = g);
+    }
+    let creditAfter: number | null = null;
 
     // ONE transaction (serialized by MARKET_LOCK): pin catalogue/market/settings, rank, log request + hash +
     // impressions, debit advertisers for sponsored impressions, assert no negative balance.
     const client = await pool.connect();
-    const request_id = "req_" + randomUUID();
     res.locals.request_id = request_id;
     let out;
+    let released = false;
     let click_links: any[] = [];
     try {
       await client.query("BEGIN ISOLATION LEVEL READ COMMITTED");
@@ -105,13 +132,19 @@ export function createApp() {
       out = await rank(client, { ...inp, catalogue_seq: seq, market_seq: mseq, settings_version, pacing_at_ms, embedding_model: EMBEDDING_MODEL, ranker_version: RANKER_VERSION });
       await client.query(
         `INSERT INTO requests(request_id,catalogue_seq,embedding_model,ranker_version,request_canonical,request_hash,
-           response_canonical,response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_ref,payment_status,bot_id,settings_version,market_seq,
-           payment_chain_id,settle_via,tos_version,tos_hash,tos_proof,pay_to,payment_valid_before)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'verified',$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+           response_canonical,response_hash,payer,payment_mode,payment_network,payment_amount_atomic,payment_ref,bot_id,settings_version,market_seq,
+           payment_chain_id,settle_via,tos_version,tos_hash,tos_proof,pay_to,payment_valid_before,payment_status,payment_method)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
         [request_id, seq, EMBEDDING_MODEL, RANKER_VERSION, reqCanon, sha256(reqCanon), out.canonical, out.hash,
          pay.payer, pay.mode, pay.network, pay.amount.toString(), pay.ref, botId(req), settings_version, mseq,
          pay.chainId, pay.settle_via, tos.tos_version, tos.tos_hash, tos.proof, pay.payTo,
-         pay.mode === "x402" ? Number((pay as any).payload?.payload?.authorization?.validBefore ?? 0) || null : null]);   // always stored (needed to ever compensate)
+         pay.mode === "x402" ? Number((pay as any).payload?.payload?.authorization?.validBefore ?? 0) || null : null,   // always stored (needed to ever compensate)
+         credit ? "settled" : "verified", credit ? "credits" : "per_query"]);
+      if (credit) {   // atomic debit in the same transaction as the request log + impressions
+        const d = await debitForQuery(client, credit.wallet, Number(price), request_id);
+        if (!d) throw Object.assign(new Error("insufficient credit"), { insufficientCredit: true });
+        creditAfter = d.balance_atomic;
+      }
       await reserveNonce(client, pay);   // same tx: replayed EIP-3009 nonce => 23505 => 409
       const debited: string[] = [];
       for (let i = 0; i < out.meta.length; i++) {
@@ -138,10 +171,15 @@ export function createApp() {
     } catch (e: any) {
       await client.query("ROLLBACK").catch(() => {});
       res.locals.error = String(e?.message ?? e);
+      if (e?.insufficientCredit) { client.release(); released = true;   // raced to zero: same 402 as an unpaid request
+        await paymentGate(req, res, "bot", "/v1/recommend", req.body, price, "Ranked bot-service recommendations", { credits: { balance_atomic: await creditBalance(pool, credit!.wallet), required_atomic: Number(price), topup: "/v1/credits/topup" } }, true); return; }
       if (e?.code === "23505") return res.status(409).json({ error: "payment already used" });
       console.error("recommend", request_id, e?.stack ?? e);
       return res.status(500).json({ error: "internal_error", message: "internal error", request_id });
-    } finally { client.release(); }
+    } finally { if (!released) client.release(); }
+    if (credit) return res.json({ request_id, response_hash: out.hash, response: out.body, click_links,
+      payment: { method: "credits", debited_atomic: Number(price), credit_balance_atomic: creditAfter, queries_remaining: Math.floor(creditAfter! / Number(price)) },
+      tos: { version: tos.tos_version, sha256: tos.tos_hash, proof: tos.proof } });
 
     // a thrown settle is AMBIGUOUS (the authorization may have been broadcast): settle_unknown, reconciled on-chain later
     const s = await settlePayment(pay).catch((e: any) => ({ ok: false, ambiguous: true, via: pay.settle_via, error: "exception: " + String(e?.shortMessage ?? e?.message ?? e).slice(0, 480) } as any));
@@ -335,6 +373,46 @@ export function createApp() {
       res.json({ advertiser_id: res.locals.adv, credited_atomic: amt, settle_tx: s.tx, mode: pay.mode, network: pay.network, settle_via: s.via, tos: { version: tos.tos_version, sha256: tos.tos_hash }, ...c });
     } catch (e) { fail(res, e); }
   });
+  // ---------- Prepaid search credits (searcher bots) ----------
+  // Top-up: one x402 payment of settings.credit_pack_price_atomic (ToS bound into the nonce, bans apply). Credited only after
+  // settlement. First top-up (or ?rotate_key=1) returns an API key bound to the payer wallet, shown once. No refunds.
+  app.get("/v1/credits/pricing", async (_req, res) => { const { settings: S } = await currentSettings();
+    res.json({ pack_price_atomic: S.credit_pack_price_atomic, pack_credit_atomic: S.credit_pack_credit_atomic, query_price_atomic: S.query_price_atomic,
+      queries_per_pack: Math.floor(S.credit_pack_credit_atomic / S.query_price_atomic), topup: "POST /v1/credits/topup", tos_params: { pack_price_atomic: S.credit_pack_price_atomic }, refunds: "none" }); });
+  app.post("/v1/credits/topup", banGuard(), limit("credits_topup", 30, 10), async (req, res) => {
+    const { settings: S } = await currentSettings();
+    const amt = S.credit_pack_price_atomic, grant = S.credit_pack_credit_atomic;
+    const rotate = req.query.rotate_key === "1" || req.body?.rotate_key === true;
+    const g = await paymentGate(req, res, "bot", "/v1/credits/topup", { pack_price_atomic: amt }, BigInt(amt), `Prepaid search credits: ${Math.floor(grant / S.query_price_atomic)} queries`);
+    if (!g) return;
+    const { pay, tos } = g;
+    if (!/^0x[0-9a-fA-F]{40}$/.test(pay.payer) && pay.payer !== "0xmock") return res.status(400).json({ error: "payer wallet required" });
+    if ((await pool.query("SELECT 1 FROM search_credit_ledger WHERE payment_ref=$1", [pay.ref])).rows.length) return res.status(409).json({ error: "payment already used" });
+    try { await reserveNonce(pool, pay); } catch (e: any) { if (e?.code === "23505") return res.status(409).json({ error: "payment already used (nonce)" }); throw e; }
+    const s = await settlePayment(pay).catch((e: any) => ({ ok: false, ambiguous: true, error: "exception: " + String(e?.message ?? e).slice(0, 480) } as any));
+    const meta = { payment_network: pay.network, payment_chain_id: pay.chainId, settle_via: s.via, tos_version: tos.tos_version, tos_hash: tos.tos_hash, tos_proof: tos.proof, pay_to: pay.payTo, note: pay.mode };
+    if (!s.ok && s.ambiguous) {
+      console.error("credits topup settle_unknown", s.error);
+      await pool.query(`INSERT INTO topup_pending(payment_ref,target,advertiser_id,amount_atomic,chain_id,payer,nonce,valid_before,mode,settle_tx,settle_via,credit_meta,last_error)
+          VALUES ($1,'search_credits',NULL,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (payment_ref) DO NOTHING`,
+        [pay.ref, grant, pay.chainId ?? null, pay.payer.toLowerCase(), (pay as any).nonce ?? null, Number((pay as any).payload?.payload?.authorization?.validBefore ?? 0) || null, pay.mode, s.tx ?? null, s.via ?? null, meta, String(s.error ?? "").slice(0, 300)]);
+      return res.status(202).json({ state: "settle_unknown", message: "Settlement outcome unknown; reconciled on-chain and credited automatically if it settled (top up again with rotate_key=1 to obtain a key if this was your first top-up)." });
+    }
+    if (!s.ok) { res.locals.error = "settlement failed: " + (s.error ?? "unknown"); return res.status(402).json({ error: "settlement_failed", message: "Payment settlement failed; no credit granted and you were not charged." }); }
+    if (s.header) res.set("X-PAYMENT-RESPONSE", s.header);
+    try {
+      const c = await creditTopup(pay.payer, grant, { ...meta, payment_ref: pay.ref, settle_tx: s.tx ?? null }, rotate);
+      res.json({ wallet: c.wallet, paid_atomic: amt, credited_atomic: grant, balance_atomic: c.balance_atomic, queries_remaining: Math.floor(c.balance_atomic / S.query_price_atomic),
+        ...(c.api_key ? { api_key: c.api_key, api_key_note: "shown once; send as Authorization: Bearer <key> on POST /v1/recommend" } : { api_key: null, api_key_note: "existing key unchanged (top up with rotate_key=1 to issue a new one)" }),
+        settle_tx: s.tx ?? null, network: pay.network, settle_via: s.via, tos: { version: tos.tos_version, sha256: tos.tos_hash }, refunds: "none" });
+    } catch (e) { fail(res, e); }
+  });
+  app.get("/v1/credits/me", limit("credits_me", 120), async (req, res) => {
+    const ck = /^Bearer (bck_\S+)$/.exec(req.get("authorization") ?? "");
+    const a = ck ? await creditAccountByKey(ck[1]) : null;
+    if (!a) return res.status(401).json({ error: "credit_key_required", message: "send Authorization: Bearer <search-credit API key>" });
+    res.json(await creditSummary(a.wallet, (await currentSettings()).settings.query_price_atomic));
+  });
   app.use((req, res) => { res.status(404).json({ error: "not_found", message: `no route ${req.method} ${req.path}` }); });
   app.use((e: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const status = e?.status ?? e?.statusCode ?? 500; res.locals.error = String(e?.message ?? e);
@@ -384,11 +462,12 @@ function portalStatic(): express.RequestHandler {
 }
 
 /** x402 + ToS gate: 402 with accepts (one per active EVM chain) + ToS; ToS acceptance must be bound into the EIP-3009 nonce. */
-async function paymentGate(req: express.Request, res: express.Response, kind: TosKind, route: string, params: unknown, amount: bigint, description: string) {
+async function paymentGate(req: express.Request, res: express.Response, kind: TosKind, route: string, params: unknown, amount: bigint, description: string, extra?: Record<string, unknown> | null, force402 = false) {
   const base = publicBase(req);
   const tos = await tosInfo(kind, base);
   const acc = await accepts(base + route, amount, description, tos);
-  const fail = (error: string) => { res.locals.error = error; res.status(402).json({ x402Version: 1, error, accepts: acc, tos }); return null; };
+  const fail = (error: string) => { res.locals.error = error; res.status(402).json({ x402Version: 1, error, accepts: acc, tos, ...(extra ?? {}) }); return null; };
+  if (force402) return fail("insufficient search credit");
   if (!acc.length) return fail("no payment network currently available (relayer has no gas on any enabled chain)");
   const header = req.get("X-PAYMENT");
   if (!header) return fail("X-PAYMENT header is required (and ToS acceptance: X-TOS-ACCEPT + X-TOS-SALT bound into the nonce)");

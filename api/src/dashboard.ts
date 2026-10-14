@@ -35,6 +35,14 @@ export function dashboardRouter() {
   r.use(adminRouter());
   r.use(crawlerRouter());
   r.get("/", (_q, res) => res.sendFile(join(__dirname, "..", "public", "dashboard.html")));
+  r.get("/api/credits", async (_q2, res) => {   // prepaid search credits: per-wallet balances + recent credit-debited queries
+    const { allCreditAccounts } = await import("./credits");
+    res.json({ query_price_atomic: (await (await import("./settings")).currentSettings()).settings.query_price_atomic, accounts: await allCreditAccounts(),
+      recent: await q(`SELECT r.request_id, r.received_at, r.payer, r.bot_id, r.payment_amount_atomic::text amount_atomic, r.request_canonical::json->>'query' AS query FROM requests r WHERE r.payment_method='credits' ORDER BY received_at DESC LIMIT 30`),
+      daily: await q(`SELECT to_char(date_trunc('day', created_at AT TIME ZONE 'Europe/London'),'YYYY-MM-DD') AS day, count(*) FILTER (WHERE kind='query_debit')::int queries,
+          COALESCE(-SUM(delta_atomic) FILTER (WHERE kind='query_debit'),0)::text debited_atomic, COALESCE(SUM(delta_atomic) FILTER (WHERE kind<>'query_debit'),0)::text topped_up_atomic
+        FROM search_credit_ledger GROUP BY 1 ORDER BY 1 DESC LIMIT 14`) });
+  });
   r.get("/api/usage", async (req, res) => {
     const hours = Math.min(Number(req.query.hours ?? 24) || 24, 168);
     const bot = typeof req.query.bot === "string" && req.query.bot ? req.query.bot : null;

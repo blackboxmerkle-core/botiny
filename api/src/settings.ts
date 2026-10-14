@@ -7,20 +7,28 @@ export interface Settings {
   promoted_slots: number;              // max sponsored results per response (placed first)
   bid_weight_ppm_per_atomic: number;   // promo_score = relevance_ppm + bid_weight * bid_atomic
   max_bid_atomic: number;              // advertiser bid cap
+  credit_pack_price_atomic: number;    // x402 price of one search-credit top-up (default 1 test USDC)
+  credit_pack_credit_atomic: number;   // credit granted per top-up; each credit search debits query_price_atomic (default 1000 queries)
+  sponsored_floor_ppm: number;         // promo-v4: sponsored candidates need score >= this (>= relevance_threshold_ppm)
+  sponsored_slots_max: number;         // promo-v4: max sponsored results (1..2)
+  relevance_band_ppm: number;          // promo-v4: sponsored ordered by floor(score/band) desc, then bid, then pacing boost
 }
 export const DEFAULT_SETTINGS: Settings = {
   query_price_atomic: 1000, fixed_cpi_atomic: 100, relevance_threshold_ppm: 150000,
   promoted_slots: 2, bid_weight_ppm_per_atomic: 200, max_bid_atomic: 5000,
+  credit_pack_price_atomic: 1_000_000, credit_pack_credit_atomic: 1_000_000, sponsored_floor_ppm: 250000, sponsored_slots_max: 1, relevance_band_ppm: 50000,
 };
 const LIMITS: Record<keyof Settings, [number, number]> = {
   query_price_atomic: [1, 10000], fixed_cpi_atomic: [0, 10000], relevance_threshold_ppm: [0, 1000000],
   promoted_slots: [0, 5], bid_weight_ppm_per_atomic: [0, 100000], max_bid_atomic: [0, 100000],
+  credit_pack_price_atomic: [1000, 10_000_000], credit_pack_credit_atomic: [1000, 100_000_000], sponsored_floor_ppm: [0, 1000000], sponsored_slots_max: [0, 2], relevance_band_ppm: [1, 1000000],
 };
 export function validateSettings(s: any): string | null {
   for (const k of Object.keys(LIMITS) as (keyof Settings)[]) {
     const v = s?.[k]; const [lo, hi] = LIMITS[k];
     if (!Number.isSafeInteger(v) || v < lo || v > hi) return `${k} must be integer in [${lo}, ${hi}]`;
   }
+  if (s.sponsored_floor_ppm < s.relevance_threshold_ppm) return "sponsored_floor_ppm must be >= relevance_threshold_ppm";
   return null;
 }
 export async function ensureSettings() {
