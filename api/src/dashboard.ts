@@ -35,6 +35,13 @@ export function dashboardRouter() {
   r.use(adminRouter());
   r.use(crawlerRouter());
   r.get("/", (_q, res) => res.sendFile(join(__dirname, "..", "public", "dashboard.html")));
+  r.get("/api/feed", async (_q2, res) => {   // data-feed subscriptions: per-wallet tier/quota + usage log
+    const { allFeedAccounts } = await import("./feed");
+    res.json({ accounts: await allFeedAccounts(),
+      recent: await q(`SELECT usage_id::int, at, wallet, endpoint, status, items, cursor_in, catalogue_seq::int FROM feed_usage ORDER BY usage_id DESC LIMIT 30`),
+      daily: await q(`SELECT to_char(date_trunc('day', at AT TIME ZONE 'Europe/London'),'YYYY-MM-DD') AS day, count(*) FILTER (WHERE status=200)::int ok, count(*) FILTER (WHERE status<>200)::int denied, COALESCE(sum(items),0)::int items
+        FROM feed_usage GROUP BY 1 ORDER BY 1 DESC LIMIT 14`) });
+  });
   r.get("/api/credits", async (_q2, res) => {   // prepaid search credits: per-wallet balances + recent credit-debited queries
     const { allCreditAccounts } = await import("./credits");
     res.json({ query_price_atomic: (await (await import("./settings")).currentSettings()).settings.query_price_atomic, accounts: await allCreditAccounts(),

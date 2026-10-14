@@ -17,6 +17,9 @@ const LEDGER = `
          c.payment_network, c.settle_via, c.tos_version
     FROM search_credit_ledger c WHERE c.kind IN ('topup_x402','admin_credit')
   UNION ALL
+  SELECT f.created_at, 'data_feed_purchase', 'settled', CASE WHEN f.settle_via='mock' THEN 'mock' ELSE 'x402' END, f.wallet, f.price_atomic, NULL, f.settle_tx, NULL, NULL, f.tier, NULL, f.payment_network, f.settle_via, f.tos_version
+    FROM feed_periods f WHERE f.kind='purchase_x402'
+  UNION ALL
   SELECT b.created_at, CASE b.kind WHEN 'topup_x402' THEN 'advertiser_topup' ELSE 'advertiser_admin_credit' END,
          CASE b.kind WHEN 'topup_x402' THEN 'settled' ELSE 'credited' END,
          CASE b.kind WHEN 'topup_x402' THEN COALESCE(NULLIF(b.note,''),'x402') ELSE 'offchain' END,
@@ -51,7 +54,8 @@ export function financialsRouter() {
   r.get("/api/financials", async (req, res) => {
     const settled = await q(`SELECT settle_tx AS tx, payment_network AS network FROM requests WHERE payment_mode='x402' AND payment_status='settled' AND settle_tx IS NOT NULL
       UNION SELECT settle_tx, COALESCE(payment_network,'base-sepolia') FROM balance_ledger WHERE kind='topup_x402' AND note='x402' AND settle_tx IS NOT NULL
-      UNION SELECT settle_tx, payment_network FROM search_credit_ledger WHERE kind='topup_x402' AND note='x402' AND settle_tx IS NOT NULL`);
+      UNION SELECT settle_tx, payment_network FROM search_credit_ledger WHERE kind='topup_x402' AND note='x402' AND settle_tx IS NOT NULL
+      UNION SELECT settle_tx, payment_network FROM feed_periods WHERE kind='purchase_x402' AND settle_via<>'mock' AND settle_tx IS NOT NULL AND settle_tx<>'mock'`);
     const chain = await chainView(settled);
     const rows = await ledger(req.query);
     for (const x of rows) {
@@ -72,6 +76,7 @@ export function financialsRouter() {
         coalesce(sum(amount_atomic) FILTER (WHERE type='advertiser_impression_charge'),0)::text AS ad_fees,
         count(*) FILTER (WHERE type='advertiser_impression_charge')::int AS charged_impressions,
         coalesce(sum(amount_atomic) FILTER (WHERE type='bot_credit_topup' AND status='settled'),0)::text AS credit_topups_settled,
+        coalesce(sum(amount_atomic) FILTER (WHERE type='data_feed_purchase'),0)::text AS feed_purchases,
         coalesce(sum(amount_atomic) FILTER (WHERE type='advertiser_topup' AND mode='x402'),0)::text AS topups_onchain,
         coalesce(sum(amount_atomic) FILTER (WHERE type='advertiser_topup' AND mode<>'x402'),0)::text AS topups_mock,
         coalesce(sum(amount_atomic) FILTER (WHERE type='advertiser_admin_credit'),0)::text AS admin_credits

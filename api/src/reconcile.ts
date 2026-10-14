@@ -74,6 +74,14 @@ async function resolveTopup(t: any) {
   let used: boolean | null = null;
   try { used = await checker({ payment_ref: t.payment_ref, mode: t.mode, chain_id: t.chain_id, payer: t.payer, nonce: t.nonce, tx: t.settle_tx }); } catch (e: any) { await pool.query("UPDATE topup_pending SET checks=checks+1, last_error=$2 WHERE payment_ref=$1", [t.payment_ref, String(e?.message ?? e).slice(0, 300)]); return "pending"; }
   await pool.query("UPDATE topup_pending SET checks=checks+1 WHERE payment_ref=$1", [t.payment_ref]);
+  if (used === true && /^feed_(basic|pro)$/.test(t.target)) {
+    const dup = (await pool.query("SELECT 1 FROM feed_periods WHERE payment_ref=$1", [t.payment_ref])).rows.length;
+    if (!dup) { const { settingsAt, currentSettings } = await import("./settings"); const v = t.credit_meta?.settings_version;
+      const S = v ? await settingsAt(pool, v) : (await currentSettings()).settings;
+      await (await import("./feed")).grantPeriod(t.payer, t.target.slice(5), S, v ?? null, { ...t.credit_meta, settle_tx: t.settle_tx ?? "reconciled:authorizationState", payment_ref: t.payment_ref }); }
+    await pool.query("UPDATE topup_pending SET state='credited', resolved_at=now() WHERE payment_ref=$1", [t.payment_ref]);
+    return "credited";
+  }
   if (used === true && t.target === "search_credits") {
     const dup = (await pool.query("SELECT 1 FROM search_credit_ledger WHERE payment_ref=$1", [t.payment_ref])).rows.length;
     if (!dup) await (await import("./credits")).creditTopup(t.payer, Number(t.amount_atomic), { ...t.credit_meta, settle_tx: t.settle_tx ?? "reconciled:authorizationState", payment_ref: t.payment_ref });
