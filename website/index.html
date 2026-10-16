@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Botiny | AI Search Monetization Platform</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: Space Grotesk & Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        botiny: {
+                            blue: '#2F6BFF',
+                            red: '#FF4D3D',
+                            yellow: '#FFC83D',
+                            green: '#22B573',
+                            ink: '#111418',
+                            slate: '#4A5160',
+                            soft: '#F5F6F8',
+                            line: '#E4E7EC',
+                            white: '#FFFFFF',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        display: ['Space Grotesk', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #111418;
+            color: #FFFFFF;
+        }
+        .font-display {
+            font-family: 'Space Grotesk', sans-serif;
+        }
+        /* Custom Glowing & Gradient Effects */
+        .brand-gradient-text {
+            background: linear-gradient(135deg, #2F6BFF 0%, #22B573 40%, #FFC83D 70%, #FF4D3D 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .brand-gradient-bg {
+            background: linear-gradient(135deg, #2F6BFF 0%, #22B573 50%, #FF4D3D 100%);
+        }
+        .brand-border-glow {
+            box-shadow: 0 0 25px -5px rgba(47, 107, 255, 0.3), 0 0 15px -5px rgba(34, 181, 115, 0.2);
+        }
+        .glass-card {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .glass-card-light {
+            background: #FFFFFF;
+            border: 1px solid #E4E7EC;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+        }
+        /* Interactive Step Line */
+        .step-line {
+            background: linear-gradient(to right, #2F6BFF, #22B573, #FFC83D, #FF4D3D);
+        }
+        /* Custom Range Slider */
+        input[type=range] {
+            accent-color: #22B573;
+        }
+    </style>
+</head>
+<body class="bg-botiny-ink text-white antialiased selection:bg-botiny-blue selection:text-white">
+
+    <!-- Header / Navigation -->
+    <header class="fixed top-0 left-0 right-0 z-50 transition-all duration-300 glass-card bg-botiny-ink/90 border-b border-white/10">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
+            
+            <!-- Logo: V1 Robot Mark + Wordmark -->
+            <a href="#" class="flex items-center space-x-3 group">
+                <!-- SVG V1 Robot Mark -->
+                <svg width="38" height="48" viewBox="0 0 100 120" fill="none" xmlns="http://www.w3.org/2000/svg" class="transform group-hover:scale-105 transition-transform duration-200">
+                    <!-- Sprout Top (Green #22B573) -->
+                    <path d="M50 22 C50 22, 58 10, 68 12 C78 14, 70 28, 50 28 C50 28, 42 10, 32 12 C22 14, 30 28, 50 28 Z" fill="#22B573" />
+                    <rect x="47" y="26" width="6" height="8" rx="3" fill="#22B573" />
+                    <!-- Ink Robot Head (#111418 with slight outer ring/stroke for dark BG visibility) -->
+                    <rect x="18" y="32" width="64" height="38" rx="19" fill="#111418" stroke="#ffffff" stroke-opacity="0.2" stroke-width="2"/>
+                    <!-- Glowing White Eyes -->
+                    <circle cx="38" cy="51" r="5" fill="#FFFFFF" />
+                    <circle cx="62" cy="51" r="5" fill="#FFFFFF" />
+                    <!-- Colored Ring split into 4 Quadrants -->
+                    <!-- Top-Right: Red #FF4D3D -->
+                    <path d="M 50 74 A 20 20 0 0 1 70 94" stroke="#FF4D3D" stroke-width="9" stroke-linecap="round" fill="none" />
+                    <!-- Bottom-Right: Green #22B573 -->
+                    <path d="M 70 94 A 20 20 0 0 1 50 114" stroke="#22B573" stroke-width="9" stroke-linecap="round" fill="none" />
+                    <!-- Bottom-Left: Yellow #FFC83D -->
+                    <path d="M 50 114 A 20 20 0 0 1 30 94" stroke="#FFC83D" stroke-width="9" stroke-linecap="round" fill="none" />
+                    <!-- Top-Left: Blue #2F6BFF -->
+                    <path d="M 30 94 A 20 20 0 0 1 50 74" stroke="#2F6BFF" stroke-width="9" stroke-linecap="round" fill="none" />
+                </svg>
+                <!-- Wordmark -->
+                <span class="font-display text-2xl font-bold tracking-tight text-white">Botiny</span>
+            </a>
+
+            <!-- Navigation Links -->
+            <nav class="hidden md:flex items-center space-x-8 text-sm font-medium text-gray-300">
+                <a href="#problem" class="hover:text-white transition-colors">The Problem</a>
+                <a href="#opportunity" class="hover:text-white transition-colors">The Opportunity</a>
+                <a href="#how-it-flows" class="hover:text-white transition-colors">How It Flows</a>
+                <a href="#revenue-split" class="hover:text-white transition-colors">Revenue Split</a>
+                <a href="#why-we-win" class="hover:text-white transition-colors">Why We Win</a>
+            </nav>
+
+            <!-- CTA Button -->
+            <div class="hidden sm:flex items-center space-x-4">
+                <a href="#waitlist" class="px-5 py-2.5 rounded-full bg-botiny-blue hover:bg-blue-600 text-white font-medium text-sm transition-all duration-200 transform hover:scale-105 shadow-lg shadow-blue-500/25">
+                    Join Waitlist
+                </a>
+            </div>
+
+            <!-- Mobile menu button -->
+            <button id="mobile-menu-btn" class="md:hidden text-gray-400 hover:text-white focus:outline-none p-2">
+                <i class="fa-solid fa-bars text-xl"></i>
+            </button>
+        </div>
+
+        <!-- Mobile Navigation Menu -->
+        <div id="mobile-menu" class="hidden md:hidden px-4 pt-2 pb-6 glass-card bg-botiny-ink border-b border-white/10 space-y-3">
+            <a href="#problem" class="block text-gray-300 hover:text-white py-2">The Problem</a>
+            <a href="#opportunity" class="block text-gray-300 hover:text-white py-2">The Opportunity</a>
+            <a href="#how-it-flows" class="block text-gray-300 hover:text-white py-2">How It Flows</a>
+            <a href="#revenue-split" class="block text-gray-300 hover:text-white py-2">Revenue Split</a>
+            <a href="#why-we-win" class="block text-gray-300 hover:text-white py-2">Why We Win</a>
+            <a href="#waitlist" class="block w-full text-center py-3 rounded-full bg-botiny-blue text-white font-medium">Join Waitlist</a>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="relative pt-32 pb-20 md:pt-44 md:pb-32 overflow-hidden">
+        <!-- Background Ambient Glow -->
+        <div class="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[350px] bg-gradient-to-tr from-botiny-blue/20 via-botiny-green/20 to-botiny-red/10 blur-[120px] rounded-full -z-10 pointer-events-none"></div>
+
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+            
+            <!-- Badge -->
+            <div class="inline-flex items-center space-x-2 px-4 py-2 rounded-full glass-card border-white/10 mb-8 animate-fade-in">
+                <span class="w-2 h-2 rounded-full bg-botiny-green animate-pulse"></span>
+                <span class="text-xs sm:text-sm font-medium text-gray-300">The First AI Search Monetization Layer</span>
+            </div>
+
+            <!-- Main Headline -->
+            <h1 class="font-display text-4xl sm:text-6xl lg:text-7xl font-bold tracking-tight text-white mb-6 leading-[1.15]">
+                Guessing costs billions.<br />
+                <span class="brand-gradient-text">AI knows.</span>
+            </h1>
+
+            <!-- Subheadline -->
+            <p class="max-w-3xl mx-auto text-lg sm:text-xl text-gray-300 mb-10 leading-relaxed font-normal">
+                AI providers turn what they know about their users into exactly the right result at the right moment. Advertisers go from <span class="text-white font-semibold underline decoration-botiny-red/60 decoration-2">scatter gun</span> to <span class="text-white font-semibold underline decoration-botiny-green/60 decoration-2">rail gun</span>, with incentives.
+            </p>
+
+            <!-- Hero Form / Waitlist Quick Signup -->
+            <div class="max-w-md mx-auto mb-16">
+                <form id="hero-waitlist-form" action="https://api.web3forms.com/submit" method="POST" onsubmit="handleWaitlistSubmit(event, 'hero')" class="flex flex-col sm:flex-row gap-2 p-1.5 rounded-2xl glass-card border border-white/15 focus-within:border-botiny-blue transition-colors">
+                    <input type="hidden" name="access_key" value="df2c4a55-ce12-496b-adb6-ccc3bf0b77e1">
+                    <input type="hidden" name="subject" value="New Botiny Hero Waitlist Signup">
+                    <input type="hidden" name="from_name" value="Botiny Landing Page">
+                    <input type="email" name="email" id="hero-email" required placeholder="Enter your email address" class="w-full px-4 py-3 bg-transparent text-white placeholder-gray-500 focus:outline-none text-sm">
+                    <button type="submit" class="px-6 py-3 rounded-xl bg-botiny-blue hover:bg-blue-600 font-semibold text-sm transition-all whitespace-nowrap shadow-lg shadow-blue-600/30">
+                        Get Early Access
+                    </button>
+                </form>
+                <div id="hero-waitlist-success" class="hidden mt-3 text-sm text-botiny-green font-medium flex items-center justify-center space-x-2">
+                    <i class="fa-solid fa-circle-check"></i>
+                    <span>You're on the list! Position #<span class="waitlist-pos">4,892</span></span>
+                </div>
+            </div>
+
+            <!-- Stats Ticker / Highlight Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto text-left">
+                
+                <div class="glass-card p-6 rounded-2xl border-l-4 border-l-botiny-red hover:translate-y-[-2px] transition-transform">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-xs uppercase tracking-wider text-gray-400 font-semibold">2025 Invalid Traffic</span>
+                        <i class="fa-solid fa-triangle-exclamation text-botiny-red"></i>
+                    </div>
+                    <div class="font-display text-3xl lg:text-4xl font-bold text-white mb-1">$63 Billion</div>
+                    <p class="text-xs text-gray-400">Lost entirely to fake clicks, bot traffic, and non-converting impressions.</p>
+                </div>
+
+                <div class="glass-card p-6 rounded-2xl border-l-4 border-l-botiny-yellow hover:translate-y-[-2px] transition-transform">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-xs uppercase tracking-wider text-gray-400 font-semibold">Wasted Programmatic Spend</span>
+                        <i class="fa-solid fa-arrow-trend-down text-botiny-yellow"></i>
+                    </div>
+                    <div class="font-display text-3xl lg:text-4xl font-bold text-white mb-1">$26.8 Billion</div>
+                    <p class="text-xs text-gray-400">Wasted each year due to poor targeting and blind keyword matching.</p>
+                </div>
+
+                <div class="glass-card p-6 rounded-2xl border-l-4 border-l-botiny-blue hover:translate-y-[-2px] transition-transform">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-xs uppercase tracking-wider text-gray-400 font-semibold">Forecast Ad Fraud (2028)</span>
+                        <i class="fa-solid fa-chart-line-up text-botiny-blue"></i>
+                    </div>
+                    <div class="font-display text-3xl lg:text-4xl font-bold text-white mb-1">$172 Billion</div>
+                    <p class="text-xs text-gray-400">Projected rise from $84B without cryptographic AI intent verification.</p>
+                </div>
+
+            </div>
+
+        </div>
+    </section>
+
+    <!-- The Problem vs. The Opportunity (Interactive Toggle Section) -->
+    <section id="problem" class="py-20 bg-black/40 relative border-t border-b border-white/5">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            
+            <div class="text-center max-w-3xl mx-auto mb-16">
+                <h2 class="font-display text-3xl sm:text-5xl font-bold text-white mb-4">
+                    Precision on Steroids.
+                </h2>
+                <p class="text-gray-400 text-lg">
+                    Traditional advertising relies on coarse guesswork. AI search monetization understands intent context in real time.
+                </p>
+            </div>
+
+            <!-- Comparison Interactive Toggle Card -->
+            <div class="glass-card rounded-3xl p-6 sm:p-10 max-w-5xl mx-auto">
+                
+                <!-- Toggle Switch -->
+                <div class="flex justify-center mb-10">
+                    <div class="bg-botiny-ink p-1.5 rounded-full border border-white/10 inline-flex space-x-2">
+                        <button id="toggle-problem-btn" onclick="setComparisonMode('problem')" class="px-6 py-2.5 rounded-full text-sm font-semibold transition-all bg-botiny-red text-white shadow">
+                            Old World (Guessing)
+                        </button>
+                        <button id="toggle-opportunity-btn" onclick="setComparisonMode('opportunity')" class="px-6 py-2.5 rounded-full text-sm font-semibold transition-all text-gray-400 hover:text-white">
+                            Botiny AI (Intent)
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Content Panel: Problem -->
+                <div id="panel-problem" class="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
+                    <div class="space-y-4">
+                        <span class="inline-block px-3 py-1 rounded bg-botiny-red/20 text-botiny-red text-xs font-bold uppercase tracking-wide">The Legacy Flaw</span>
+                        <h3 class="font-display text-2xl font-bold text-white">The "Scatter Gun" Approach</h3>
+                        <p class="text-gray-300 text-sm leading-relaxed">
+                            Advertisers spam search queries based on broad demographic assumptions and static keywords. The user receives irrelevant ads, clicks are fake or accidental, and billions are lost to fraud.
+                        </p>
+                        <ul class="space-y-2 text-sm text-gray-400">
+                            <li class="flex items-center space-x-2">
+                                <i class="fa-solid fa-xmark text-botiny-red"></i>
+                                <span>No real understanding of user context</span>
+                            </li>
+                            <li class="flex items-center space-x-2">
+                                <i class="fa-solid fa-xmark text-botiny-red"></i>
+                                <span>High fraud risk and zero verifiability</span>
+                            </li>
+                            <li class="flex items-center space-x-2">
+                                <i class="fa-solid fa-xmark text-botiny-red"></i>
+                                <span>Annoying ads that disrupt user experience</span>
+                            </li>
+                        </ul>
+                    </div>
+                    <div class="bg-botiny-ink/80 rounded-2xl p-6 border border-botiny-red/30 relative">
+                        <div class="text-xs font-mono text-gray-500 mb-2">// Legacy Search Query Simulation</div>
+                        <div class="bg-white/5 p-3 rounded-lg text-xs font-mono text-gray-300 mb-3">
+                            User searches: "flights to Hawaii"
+                        </div>
+                        <div class="bg-botiny-red/10 border border-botiny-red/40 p-4 rounded-xl text-xs space-y-2">
+                            <div class="font-bold text-botiny-red">SPONSORED AD (IRRELEVANT)</div>
+                            <div class="text-white font-medium">Buy Cheap Credit Cards Now!</div>
+                            <p class="text-gray-400">High interest rates, instant approval online.</p>
+                            <span class="text-[10px] text-red-400 italic">User immediately bounces • $4.50 wasted on bad click</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Content Panel: Opportunity (Default Hidden) -->
+                <div id="panel-opportunity" class="hidden grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
+                    <div class="space-y-4">
+                        <span class="inline-block px-3 py-1 rounded bg-botiny-green/20 text-botiny-green text-xs font-bold uppercase tracking-wide">The Botiny Precision</span>
+                        <h3 class="font-display text-2xl font-bold text-white">The "Rail Gun" Match</h3>
+                        <p class="text-gray-300 text-sm leading-relaxed">
+                            AI knows who, where, when, how and why. It connects natural conversation to exact conversion moments with built-in user incentives.
+                        </p>
+                        <div class="p-4 rounded-xl bg-botiny-green/10 border border-botiny-green/30">
+                            <div class="text-xs text-botiny-green font-bold uppercase mb-1">Real Opportunity Example</div>
+                            <p class="text-sm italic text-gray-200">
+                                "A Hawaii trip mentioned two weeks ago becomes this week's birthday deal."
+                            </p>
+                        </div>
+                    </div>
+                    <div class="bg-botiny-ink/80 rounded-2xl p-6 border border-botiny-green/30 relative">
+                        <div class="text-xs font-mono text-gray-500 mb-2">// Botiny Intent Match</div>
+                        <div class="bg-white/5 p-3 rounded-lg text-xs font-mono text-gray-300 mb-3">
+                            AI Context: "Planning 30th birthday in Maui next month"
+                        </div>
+                        <div class="bg-botiny-green/10 border border-botiny-green/40 p-4 rounded-xl text-xs space-y-2">
+                            <div class="flex justify-between items-center">
+                                <span class="font-bold text-botiny-green">PERFECT TIMING OFFER</span>
+                                <span class="px-2 py-0.5 rounded bg-botiny-green text-black font-bold text-[10px]">100% Verified</span>
+                            </div>
+                            <div class="text-white font-medium">20% Off Luxury Maui Resort Package + Birthday Perks</div>
+                            <p class="text-gray-300">Exclusive AI reward delivered for your upcoming birthday flight dates.</p>
+                            <span class="text-[10px] text-botiny-green italic">Instant purchase • Advertiser pays for outcome</span>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+        </div>
+    </section>
+
+    <!-- How It Flows Section (7-Step Interactive Visual Flow) -->
+    <section id="how-it-flows" class="py-24 relative overflow-hidden">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            
+            <div class="text-center max-w-3xl mx-auto mb-16">
+                <span class="text-botiny-blue font-semibold text-sm uppercase tracking-wider">Seamless Protocol</span>
+                <h2 class="font-display text-3xl sm:text-5xl font-bold text-white mt-2 mb-4">
+                    How It Flows
+                </h2>
+                <p class="text-gray-400">
+                    A frictionless 7-step loop connecting advertisers, AI providers, and buyers with cryptographic proof.
+                </p>
+            </div>
+
+            <!-- Steps Grid / Interactive Timeline -->
+            <div class="relative">
+                <!-- Connecting Line (Desktop) -->
+                <div class="hidden lg:block absolute top-1/2 left-0 right-0 h-1 step-line -translate-y-1/2 opacity-30 z-0"></div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-4 relative z-10">
+                    
+                    <!-- Step 1 -->
+                    <div class="glass-card p-5 rounded-2xl hover:border-botiny-blue transition-all group hover:-translate-y-1">
+                        <div class="w-10 h-10 rounded-xl bg-botiny-blue/20 text-botiny-blue font-display font-bold flex items-center justify-center mb-4 group-hover:bg-botiny-blue group-hover:text-white transition-colors">
+                            1
+                        </div>
+                        <h4 class="font-display font-bold text-white text-base mb-1">Advertiser Posts</h4>
+                        <p class="text-gray-400 text-xs">Brands submit campaign offers and goals to Botiny network.</p>
+                    </div>
+
+                    <!-- Step 2 -->
+                    <div class="glass-card p-5 rounded-2xl hover:border-botiny-blue transition-all group hover:-translate-y-1">
+                        <div class="w-10 h-10 rounded-xl bg-botiny-blue/20 text-botiny-blue font-display font-bold flex items-center justify-center mb-4 group-hover:bg-botiny-blue group-hover:text-white transition-colors">
+                            2
+                        </div>
+                        <h4 class="font-display font-bold text-white text-base mb-1">We Curate</h4>
+                        <p class="text-gray-400 text-xs">Botiny structures, verifies, and indexes campaign parameters.</p>
+                    </div>
+
+                    <!-- Step 3 -->
+                    <div class="glass-card p-5 rounded-2xl hover:border-botiny-green transition-all group hover:-translate-y-1">
+                        <div class="w-10 h-10 rounded-xl bg-botiny-green/20 text-botiny-green font-display font-bold flex items-center justify-center mb-4 group-hover:bg-botiny-green group-hover:text-white transition-colors">
+                            3
+                        </div>
+                        <h4 class="font-display font-bold text-white text-base mb-1">AI Asks</h4>
+                        <p class="text-gray-400 text-xs">AI search engines query Botiny for high-intent matches.</p>
+                    </div>
+
+                    <!-- Step 4 -->
+                    <div class="glass-card p-5 rounded-2xl hover:border-botiny-green transition-all group hover:-translate-y-1">
+                        <div class="w-10 h-10 rounded-xl bg-botiny-green/20 text-botiny-green font-display font-bold flex items-center justify-center mb-4 group-hover:bg-botiny-green group-hover:text-white transition-colors">
+                            4
+                        </div>
+                        <h4 class="font-display font-bold text-white text-base mb-1">We Deliver</h4>
+                        <p class="text-gray-400 text-xs">Botiny delivers tailor-matched offers instantaneously.</p>
+                    </div>
+
+                    <!-- Step 5 -->
+                    <div class="glass-card p-5 rounded-2xl hover:border-botiny-yellow transition-all group hover:-translate-y-1">
+                        <div class="w-10 h-10 rounded-xl bg-botiny-yellow/20 text-botiny-yellow font-display font-bold flex items-center justify-center mb-4 group-hover:bg-botiny-yellow group-hover:text-white transition-colors">
+                            5
+                        </div>
+                        <h4 class="font-display font-bold text-white text-base mb-1">AI Serves</h4>
+                        <p class="text-gray-400 text-xs">AI presents the natural result inline to the user.</p>
+                    </div>
+
+                    <!-- Step 6 -->
+                    <div class="glass-card p-5 rounded-2xl hover:border-botiny-red transition-all group hover:-translate-y-1">
+                        <div class="w-10 h-10 rounded-xl bg-botiny-red/20 text-botiny-red font-display font-bold flex items-center justify-center mb-4 group-hover:bg-botiny-red group-hover:text-white transition-colors">
+                            6
+                        </div>
+                        <h4 class="font-display font-bold text-white text-base mb-1">User Buys</h4>
+                        <p class="text-gray-400 text-xs">User completes the high-relevance purchase or action.</p>
+                    </div>
+
+                    <!-- Step 7 -->
+                    <div class="glass-card p-5 rounded-2xl hover:border-botiny-red transition-all group hover:-translate-y-1">
+                        <div class="w-10 h-10 rounded-xl bg-botiny-red/20 text-botiny-red font-display font-bold flex items-center justify-center mb-4 group-hover:bg-botiny-red group-hover:text-white transition-colors">
+                            7
+                        </div>
+                        <h4 class="font-display font-bold text-white text-base mb-1">Advertiser Pays</h4>
+                        <p class="text-gray-400 text-xs">Automated payout split occurs with total transparency.</p>
+                    </div>
+
+                </div>
+            </div>
+
+        </div>
+    </section>
+
+    <!-- Revenue Split (The 90 85 70 Rule + Interactive Revenue Simulator) -->
+    <section id="revenue-split" class="py-20 bg-black/50 border-t border-b border-white/10">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
+                
+                <!-- Left Column: The 90 / 85 / 70 Explanation -->
+                <div class="lg:col-span-6 space-y-6">
+                    <span class="text-botiny-green font-semibold text-sm uppercase tracking-wider">Unmatched Economics</span>
+                    <h2 class="font-display text-3xl sm:text-5xl font-bold text-white">
+                        The 90 · 85 · 70 Rule.
+                    </h2>
+                    <p class="text-gray-300 text-lg leading-relaxed">
+                        We prioritize AI builders and high-converting campaigns. Botiny shifts power back to the creators delivering actual search value.
+                    </p>
+
+                    <div class="space-y-4 pt-2">
+                        <!-- Rule 1 -->
+                        <div class="flex items-start space-x-4 p-4 rounded-xl glass-card border-l-4 border-l-botiny-blue">
+                            <div class="font-display text-3xl font-bold text-botiny-blue">90%</div>
+                            <div>
+                                <h4 class="text-white font-semibold">Of each click</h4>
+                                <p class="text-gray-400 text-xs">Directly to the AI provider routing the query.</p>
+                            </div>
+                        </div>
+
+                        <!-- Rule 2 -->
+                        <div class="flex items-start space-x-4 p-4 rounded-xl glass-card border-l-4 border-l-botiny-green">
+                            <div class="font-display text-3xl font-bold text-botiny-green">85%</div>
+                            <div>
+                                <h4 class="text-white font-semibold">Of each sale</h4>
+                                <p class="text-gray-400 text-xs">Rewarded to the AI provider driving conversion outcomes.</p>
+                            </div>
+                        </div>
+
+                        <!-- Rule 3 -->
+                        <div class="flex items-start space-x-4 p-4 rounded-xl glass-card border-l-4 border-l-botiny-yellow">
+                            <div class="font-display text-3xl font-bold text-botiny-yellow">70%</div>
+                            <div>
+                                <h4 class="text-white font-semibold">Of each deposit</h4>
+                                <p class="text-gray-400 text-xs">Allocated directly into active live campaign budgets.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Column: Interactive Revenue Simulator -->
+                <div class="lg:col-span-6">
+                    <div class="glass-card rounded-3xl p-6 sm:p-8 border border-white/10 brand-border-glow bg-botiny-ink/90">
+                        <div class="flex justify-between items-center mb-6">
+                            <h3 class="font-display text-xl font-bold text-white flex items-center space-x-2">
+                                <i class="fa-solid fa-calculator text-botiny-green"></i>
+                                <span>AI Provider Revenue Simulator</span>
+                            </h3>
+                            <span class="px-2.5 py-1 rounded-full bg-botiny-green/20 text-botiny-green text-xs font-semibold">Live Estimator</span>
+                        </div>
+
+                        <!-- Slider 1: Monthly AI Search Volume -->
+                        <div class="space-y-2 mb-6">
+                            <div class="flex justify-between text-sm">
+                                <span class="text-gray-400">Monthly AI Queries Served</span>
+                                <span id="queries-val" class="font-bold text-white">500,000</span>
+                            </div>
+                            <input type="range" id="queries-slider" min="50000" max="10000000" step="50000" value="500000" oninput="calculateEarnings()" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                        </div>
+
+                        <!-- Slider 2: Intent Match Rate -->
+                        <div class="space-y-2 mb-8">
+                            <div class="flex justify-between text-sm">
+                                <span class="text-gray-400">High-Intent Monetizable Matches</span>
+                                <span id="intent-val" class="font-bold text-white">8%</span>
+                            </div>
+                            <input type="range" id="intent-slider" min="1" max="20" step="0.5" value="8" oninput="calculateEarnings()" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                        </div>
+
+                        <!-- Calculated Result Cards -->
+                        <div class="grid grid-cols-2 gap-4 pt-4 border-t border-white/10">
+                            <div class="bg-white/5 p-4 rounded-xl">
+                                <span class="text-xs text-gray-400 block mb-1">Estimated Monthly Payout</span>
+                                <span id="est-monthly" class="font-display text-2xl sm:text-3xl font-bold text-botiny-green">$14,400</span>
+                                <span class="text-[10px] text-gray-500 block mt-1">Based on 90% click split</span>
+                            </div>
+                            <div class="bg-white/5 p-4 rounded-xl">
+                                <span class="text-xs text-gray-400 block mb-1">Estimated Annual Revenue</span>
+                                <span id="est-annual" class="font-display text-2xl sm:text-3xl font-bold text-white">$172,800</span>
+                                <span class="text-[10px] text-gray-500 block mt-1">+ Conversion sales share</span>
+                            </div>
+                        </div>
+
+                        <div class="mt-6">
+                            <a href="#waitlist" class="block w-full text-center py-3 rounded-xl bg-botiny-green hover:bg-emerald-600 font-bold text-black transition-colors">
+                                Monetize Your AI App Now
+                            </a>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+        </div>
+    </section>
+
+    <!-- Key Pillars / Why We Win -->
+    <section id="why-we-win" class="py-24 relative">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            
+            <div class="text-center max-w-3xl mx-auto mb-16">
+                <span class="text-botiny-red font-semibold text-sm uppercase tracking-wider">Unrivaled Advantage</span>
+                <h2 class="font-display text-3xl sm:text-5xl font-bold text-white mt-2 mb-4">
+                    Why We Win
+                </h2>
+                <p class="text-gray-400">
+                    We bring order to AI search monetisation, and no one else does that.
+                </p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+                
+                <!-- Pillar 1 -->
+                <div class="glass-card p-8 rounded-3xl relative hover:border-botiny-blue transition-all group">
+                    <div class="w-12 h-12 rounded-2xl bg-botiny-blue/20 flex items-center justify-center text-botiny-blue text-xl mb-6 group-hover:scale-110 transition-transform">
+                        <i class="fa-solid fa-shield-check"></i>
+                    </div>
+                    <h3 class="font-display text-xl font-bold text-white mb-3">Proof, Not Trust</h3>
+                    <p class="text-gray-400 text-sm leading-relaxed mb-4">
+                        Every result can be replayed, and advertisers can check clicks for themselves. Complete cryptographic transparency eliminates ad fraud.
+                    </p>
+                    <span class="text-xs text-botiny-blue font-semibold">100% Verifiable Audits &rarr;</span>
+                </div>
+
+                <!-- Pillar 2 -->
+                <div class="glass-card p-8 rounded-3xl relative hover:border-botiny-green transition-all group">
+                    <div class="w-12 h-12 rounded-2xl bg-botiny-green/20 flex items-center justify-center text-botiny-green text-xl mb-6 group-hover:scale-110 transition-transform">
+                        <i class="fa-solid fa-layer-group"></i>
+                    </div>
+                    <h3 class="font-display text-xl font-bold text-white mb-3">Unmatched Order</h3>
+                    <p class="text-gray-400 text-sm leading-relaxed mb-4">
+                        While traditional ad networks scramble to adapt to chat interfaces, Botiny was engineered natively for modern LLM intent streams.
+                    </p>
+                    <span class="text-xs text-botiny-green font-semibold">Built for AI Search &rarr;</span>
+                </div>
+
+                <!-- Pillar 3 -->
+                <div class="glass-card p-8 rounded-3xl relative hover:border-botiny-yellow transition-all group">
+                    <div class="w-12 h-12 rounded-2xl bg-botiny-yellow/20 flex items-center justify-center text-botiny-yellow text-xl mb-6 group-hover:scale-110 transition-transform">
+                        <i class="fa-solid fa-users text-botiny-yellow"></i>
+                    </div>
+                    <h3 class="font-display text-xl font-bold text-white mb-3">Ground-Up Growth</h3>
+                    <p class="text-gray-400 text-sm leading-relaxed mb-4">
+                        Driven directly by AI builders, a self-serve waitlist, and the developer community. Bottom-up adoption with immediate yield.
+                    </p>
+                    <span class="text-xs text-botiny-yellow font-semibold">Community Powered &rarr;</span>
+                </div>
+
+            </div>
+
+        </div>
+    </section>
+
+    <!-- Self-Serve Waitlist & Community Section -->
+    <section id="waitlist" class="py-24 bg-gradient-to-b from-black/80 to-botiny-ink relative">
+        <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+            
+            <div class="glass-card rounded-3xl p-8 sm:p-12 border border-white/15 relative overflow-hidden">
+                <div class="absolute -top-24 -right-24 w-60 h-60 bg-botiny-blue/20 rounded-full blur-3xl pointer-events-none"></div>
+
+                <div class="text-center max-w-2xl mx-auto mb-10">
+                    <h2 class="font-display text-3xl sm:text-4xl font-bold text-white mb-3">
+                        Join the Botiny Ecosystem
+                    </h2>
+                    <p class="text-gray-400 text-sm">
+                        Be among the first AI builders or advertisers to access the intent-monetization network.
+                <form id="main-waitlist-form" action="https://api.web3forms.com/submit" method="POST" onsubmit="handleWaitlistSubmit(event, 'main')" class="space-y-6">
+                    <input type="hidden" name="access_key" value="df2c4a55-ce12-496b-adb6-ccc3bf0b77e1">
+                    <input type="hidden" name="subject" value="New Botiny Ecosystem Waitlist Submission">
+                    <input type="hidden" name="from_name" value="Botiny Ecosystem Signup">
+                    
+                    <!-- Role Selector -->
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3 text-center">I am joining as an:</label>
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <label class="cursor-pointer">
+                                <input type="radio" name="role" value="builder" checked class="peer sr-only">
+                                <div class="p-4 rounded-xl glass-card text-center border border-white/10 peer-checked:border-botiny-blue peer-checked:bg-botiny-blue/20 transition-all">
+                                    <i class="fa-solid fa-code text-botiny-blue text-lg mb-1 block"></i>
+                                    <span class="text-xs font-semibold text-white">AI Builder</span>
+                                </div>
+                            </label>
+
+                            <label class="cursor-pointer">
+                                <input type="radio" name="role" value="advertiser" class="peer sr-only">
+                                <div class="p-4 rounded-xl glass-card text-center border border-white/10 peer-checked:border-botiny-green peer-checked:bg-botiny-green/20 transition-all">
+                                    <i class="fa-solid fa-bullhorn text-botiny-green text-lg mb-1 block"></i>
+                                    <span class="text-xs font-semibold text-white">Advertiser</span>
+                                </div>
+                            </label>
+
+                            <label class="cursor-pointer">
+                                <input type="radio" name="role" value="community" class="peer sr-only">
+                                <div class="p-4 rounded-xl glass-card text-center border border-white/10 peer-checked:border-botiny-yellow peer-checked:bg-botiny-yellow/20 transition-all">
+                                    <i class="fa-solid fa-seedling text-botiny-yellow text-lg mb-1 block"></i>
+                                    <span class="text-xs font-semibold text-white">Community / Investor</span>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Email & Name inputs -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1">Your Name</label>
+                            <input type="text" name="name" required placeholder="Alex Rivera" class="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white text-sm focus:outline-none focus:border-botiny-blue">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1">Email Address</label>
+                            <input type="email" name="email" id="main-email" required placeholder="alex@company.com" class="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white text-sm focus:outline-none focus:border-botiny-blue">
+                        </div>
+                    </div>
+
+                    <!-- Submit Button -->
+                    <button type="submit" id="main-submit-btn" class="w-full py-4 rounded-xl bg-gradient-to-r from-botiny-blue via-botiny-green to-botiny-yellow text-black font-bold text-base hover:opacity-95 transition-opacity shadow-lg">
+                        Reserve Your Waitlist Position
+                    </button>
+                </form>
+
+                <!-- Success Confirmation Card (Hidden by default) -->
+                <div id="main-waitlist-success" class="hidden text-center py-8 space-y-4">
+                    <div class="w-16 h-16 rounded-full bg-botiny-green/20 text-botiny-green text-2xl flex items-center justify-center mx-auto">
+                        <i class="fa-solid fa-check"></i>
+                    </div>
+                    <h3 class="font-display text-2xl font-bold text-white">Welcome to Botiny!</h3>
+                    <p class="text-gray-300 text-sm max-w-md mx-auto">
+                        You're officially confirmed. Your assigned access position is <span class="text-botiny-green font-bold">#<span class="waitlist-pos">4,892</span></span>.
+                    </p>
+                    <div class="pt-2">
+                        <button onclick="resetWaitlistForm()" class="px-5 py-2 text-xs text-gray-400 hover:text-white underline">Submit another email</button>
+                    </div>
+                </div>
+
+            </div>
+
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="bg-black py-12 border-t border-white/10">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex flex-col md:flex-row justify-between items-center space-y-6 md:space-y-0">
+                
+                <!-- Logo V1 -->
+                <div class="flex items-center space-x-3">
+                    <svg width="28" height="36" viewBox="0 0 100 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M50 22 C50 22, 58 10, 68 12 C78 14, 70 28, 50 28 C50 28, 42 10, 32 12 C22 14, 30 28, 50 28 Z" fill="#22B573" />
+                        <rect x="47" y="26" width="6" height="8" rx="3" fill="#22B573" />
+                        <rect x="18" y="32" width="64" height="38" rx="19" fill="#111418" stroke="#ffffff" stroke-opacity="0.2" stroke-width="2"/>
+                        <circle cx="38" cy="51" r="5" fill="#FFFFFF" />
+                        <circle cx="62" cy="51" r="5" fill="#FFFFFF" />
+                        <path d="M 50 74 A 20 20 0 0 1 70 94" stroke="#FF4D3D" stroke-width="9" stroke-linecap="round" fill="none" />
+                        <path d="M 70 94 A 20 20 0 0 1 50 114" stroke="#22B573" stroke-width="9" stroke-linecap="round" fill="none" />
+                        <path d="M 50 114 A 20 20 0 0 1 30 94" stroke="#FFC83D" stroke-width="9" stroke-linecap="round" fill="none" />
+                        <path d="M 30 94 A 20 20 0 0 1 50 74" stroke="#2F6BFF" stroke-width="9" stroke-linecap="round" fill="none" />
+                    </svg>
+                    <span class="font-display font-bold text-lg text-white">Botiny</span>
+                </div>
+
+                <!-- Footer Text -->
+                <p class="text-xs text-gray-500">
+                    &copy; 2026 Botiny Technologies Inc. All rights reserved. Order to AI search monetisation.
+                </p>
+
+                <!-- Social Links -->
+                <div class="flex items-center space-x-6 text-gray-400">
+                    <a href="https://x.com/blackboxmerkle" target="_blank" rel="noopener noreferrer" class="hover:text-white transition-colors p-1" title="X (Twitter)" aria-label="X (Twitter)">
+                        <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                        </svg>
+                    </a>
+                    <a href="https://github.com/blackboxmerkle-core/botiny" target="_blank" rel="noopener noreferrer" class="hover:text-white text-lg transition-colors p-1" title="GitHub" aria-label="GitHub"><i class="fa-brands fa-github text-xl"></i></a>
+                </div>
+
+            </div>
+        </div>
+    </footer>
+
+    <!-- Interactive Logic Scripts -->
+    <script>
+        // Mobile Menu Toggle Logic
+        const menuBtn = document.getElementById('mobile-menu-btn');
+        const mobileMenu = document.getElementById('mobile-menu');
+        menuBtn.addEventListener('click', () => {
+            mobileMenu.classList.toggle('hidden');
+        });
+
+        // Comparison Mode Toggle Logic
+        function setComparisonMode(mode) {
+            const probBtn = document.getElementById('toggle-problem-btn');
+            const oppBtn = document.getElementById('toggle-opportunity-btn');
+            const probPanel = document.getElementById('panel-problem');
+            const oppPanel = document.getElementById('panel-opportunity');
+
+            if (mode === 'problem') {
+                probBtn.className = "px-6 py-2.5 rounded-full text-sm font-semibold transition-all bg-botiny-red text-white shadow";
+                oppBtn.className = "px-6 py-2.5 rounded-full text-sm font-semibold transition-all text-gray-400 hover:text-white";
+                probPanel.classList.remove('hidden');
+                oppPanel.classList.add('hidden');
+            } else {
+                oppBtn.className = "px-6 py-2.5 rounded-full text-sm font-semibold transition-all bg-botiny-green text-black shadow";
+                probBtn.className = "px-6 py-2.5 rounded-full text-sm font-semibold transition-all text-gray-400 hover:text-white";
+                oppPanel.classList.remove('hidden');
+                probPanel.classList.add('hidden');
+            }
+        }
+
+        // Revenue Calculator Logic
+        function calculateEarnings() {
+            const queries = parseFloat(document.getElementById('queries-slider').value);
+            const intentRate = parseFloat(document.getElementById('intent-slider').value) / 100;
+
+            document.getElementById('queries-val').innerText = queries.toLocaleString();
+            document.getElementById('intent-val').innerText = (intentRate * 100).toFixed(1) + '%';
+
+            // Average CPC estimated at $0.40, with 90% payout to AI provider
+            const matchedQueries = queries * intentRate;
+            const monthlyPayout = matchedQueries * 0.40 * 0.90;
+            const annualPayout = monthlyPayout * 12;
+
+            document.getElementById('est-monthly').innerText = '$' + Math.round(monthlyPayout).toLocaleString();
+            document.getElementById('est-annual').innerText = '$' + Math.round(annualPayout).toLocaleString();
+        }
+
+        // Web3Forms Form Submission Handling with Robust Position Management
+        let storedPosition = localStorage.getItem('botiny_waitlist_pos');
+        let currentWaitlistNum = storedPosition ? parseInt(storedPosition) : 4892;
+
+        // Initialize position on load across all matching spans
+        function updateWaitlistDisplay(num) {
+            document.querySelectorAll('.waitlist-pos').forEach(el => {
+                el.innerText = num.toLocaleString();
+            });
+        }
+        updateWaitlistDisplay(currentWaitlistNum);
+
+        async function handleWaitlistSubmit(event, formType) {
+            event.preventDefault();
+            const form = event.target;
+            const formData = new FormData(form);
+
+            // Increment and persist position uniquely for this user
+            currentWaitlistNum += 1;
+            localStorage.setItem('botiny_waitlist_pos', currentWaitlistNum);
+            updateWaitlistDisplay(currentWaitlistNum);
+
+            // Submit asynchronously to Web3Forms
+            try {
+                fetch('https://api.web3forms.com/submit', {
+                    method: 'POST',
+                    body: formData
+                });
+            } catch (err) {
+                console.warn('Form submission dispatch:', err);
+            }
+
+            if (formType === 'hero') {
+                document.getElementById('hero-waitlist-form').classList.add('hidden');
+                document.getElementById('hero-waitlist-success').classList.remove('hidden');
+            } else {
+                document.getElementById('main-waitlist-form').classList.add('hidden');
+                document.getElementById('main-waitlist-success').classList.remove('hidden');
+            }
+        }
+
+        function resetWaitlistForm() {
+            document.getElementById('main-waitlist-form').reset();
+            document.getElementById('main-waitlist-form').classList.remove('hidden');
+            document.getElementById('main-waitlist-success').classList.add('hidden');
+        }
+
+        // Initial Calculation Run
+        calculateEarnings();
+    </script>
+</body>
+</html>
