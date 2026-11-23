@@ -52,7 +52,7 @@ crawler 10/10, contracts 8/8.
 | E | On a redirect to a different host or scheme, safe-fetch keeps only `user-agent`, `accept`, `accept-language` and `accept-encoding`. Authorization, Cookie and all custom headers are dropped. Same-host hops keep them. | E |
 | F | The rate-limit exemption applies only when the TCP **socket** peer is loopback AND there is no `X-Forwarded-For` header. ngrok traffic always carries XFF, so it is limited by the forwarded client IP, even when it claims `127.0.0.1`. | F |
 
-Live: backup `botrec-pre-settle-unknown-0008-20261013-221726.dump` (0600) was taken first, then 0008 was applied. Replay is 534/534 MATCH. External :8402 is refused. The dashboard works via ngrok (401 basic-auth). Both processes log the allow-list warning, and the sweeper runs without errors.
+Live: backup `botiny-pre-settle-unknown-0008-20261013-221726.dump` (0600) was taken first, then 0008 was applied. Replay is 534/534 MATCH. External :8402 is refused. The dashboard works via ngrok (401 basic-auth). Both processes log the allow-list warning, and the sweeper runs without errors.
 
 ## Round 3 on 860e0ba
 
@@ -66,7 +66,7 @@ Live: backup `botrec-pre-settle-unknown-0008-20261013-221726.dump` (0600) was ta
 | 6 | `verifyExact` rejects `validBefore > now + X402_MAX_VALID_BEFORE_S` (600). The shared `isAmbiguousSettleError` classifier treats invalid signature, insufficient balance/funds, nonce used, missing/invalid parameters and expired as definite. A broadcast tx is always ambiguous. The local and facilitator paths share it. | 6 (cap, env override, classifier) |
 | 7 | `click-server/package-lock.json` added. The package has no dependencies; `npm audit` reports 0 vulnerabilities. | |
 
-Live: backup `botrec-pre-round3-0009-20261013-224203.dump` (0600), then 0009 applied. Replay is 551/551 MATCH. External :8402 is refused. ngrok returns 401 (auth) on the same URL. One supervise.sh is running. The sweep runs without errors.
+Live: backup `botiny-pre-round3-0009-20261013-224203.dump` (0600), then 0009 applied. Replay is 551/551 MATCH. External :8402 is refused. ngrok returns 401 (auth) on the same URL. One supervise.sh is running. The sweep runs without errors.
 
 ## Round 4 on b9a587f
 

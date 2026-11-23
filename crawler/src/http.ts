@@ -47,8 +47,7 @@ export function isAllowed(robots: string, path: string, agent = "BotinyCrawler")
     if (k === "user-agent") { if (!cur || !lastWasAgent) { cur = { agents: [], rules: [] }; groups.push(cur); } cur.agents.push(v.toLowerCase()); lastWasAgent = true; }
     else { lastWasAgent = false; if (cur && (k === "allow" || k === "disallow")) cur.rules.push([k, v]); }
   }
-  const tokens = [agent, "BotinyCrawler", "botsource-crawler"]; // last: previous UA token
-  const mine = groups.filter(g => g.agents.some(a => a !== "*" && tokens.some(t => t.toLowerCase().includes(a))));
+  const mine = groups.filter(g => g.agents.some(a => a !== "*" && agent.toLowerCase().includes(a)));
   const use = mine.length ? mine : groups.filter(g => g.agents.includes("*"));
   let best: [string, number] = ["allow", -1];
   for (const g of use) for (const [k, v] of g.rules) {

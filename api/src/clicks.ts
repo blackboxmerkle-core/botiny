@@ -85,7 +85,7 @@ export async function pgEngine(db: { query: PoolClient["query"] }, settings?: Se
   const cfg = await clickConfig(settings);
   return new ClickEngine({ store: new PgStore(db), cfg, signingKey: keys?.privateKey, kid: keys?.kid,
     verifyKeys: keys ? { [keys.kid]: keys.publicKey } : {}, keySecret: KEY_SECRET, verifyMessage,
-    shortBase: (process.env.CLICK_SHORT_BASE ?? (process.env.PUBLIC_BASE_URL ? process.env.PUBLIC_BASE_URL.replace(/\/$/, "") + "/c" : "https://bsrc.link")).replace(/\/$/, "") });
+    shortBase: (process.env.CLICK_SHORT_BASE ?? (process.env.PUBLIC_BASE_URL ? process.env.PUBLIC_BASE_URL.replace(/\/$/, "") + "/c" : "https://botiny.link")).replace(/\/$/, "") });
 }
 
 const CHANNELS = new Set(["chat", "web", "x", "onchain", "bot"]);

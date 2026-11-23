@@ -19,7 +19,7 @@ test('GET /:code -> 302 to stored dest, async enqueue, no cookies', async () => 
   const res = await h(new Request(`https://botiny.test/${code}`, { headers: { 'user-agent': 'Mozilla/5.0', 'cf-connecting-ip': '81.2.3.4' } }), { trustCf: true }, ctx);
   assert.equal(res.status, 302);
   const loc = new URL(res.headers.get('location'));
-  assert.equal(loc.origin + loc.pathname, 'https://p0.example/l0'); assert.match(loc.searchParams.get('bs_click'), /^ck_/);
+  assert.equal(loc.origin + loc.pathname, 'https://p0.example/l0'); assert.match(loc.searchParams.get('botiny_click'), /^ck_/);
   assert.equal(res.headers.get('set-cookie'), null); assert.equal(res.headers.get('cache-control'), 'no-store');
   await Promise.all(waits);
   assert.equal(queued.length, 1); assert.equal(queued[0].token, r0.harvest_token); assert.equal(queued[0].ip, '81.2.3.4');
@@ -46,8 +46,6 @@ test('preview page for unfurlers, JWKS endpoint', async () => {
   assert.equal(res.status, 200); assert.match(await res.text(), /Incentivised listing/);
   const j = await (await h(new Request('https://botiny.test/.well-known/botiny-keys'), {}, ctx)).json();
   assert.equal(j.keys[0].kid, 'k1'); assert.equal(j.keys[0].d, undefined);
-  const prev = await (await h(new Request('https://botiny.test/.well-known/botsource-keys'), {}, ctx)).json();
-  assert.deepEqual(prev, j);
 });
 const W = '0x00000000000000000000000000000000000000b0';
 // Fake EIP-191 verifier for unit tests (the API uses viem's real verifyMessage).

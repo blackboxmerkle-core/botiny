@@ -37,7 +37,7 @@ const PORT = 18650, RPC = `http://127.0.0.1:${PORT}`;
     for (const l of r.click_links.filter((c: any) => c.click_incentive_atomic > 0)) {
       const ua = i % 6 === 5 ? "Slackbot-LinkExpanding 1.0" : i % 7 === 3 ? "Mozilla/5.0 HeadlessChrome/120" : UA;
       const res = await fetch(`${base}/c/${l.short_url.split("/").pop()}`, { redirect: "manual", headers: { "user-agent": ua, accept: "text/html", "sec-fetch-mode": "navigate", "accept-language": "en-GB", "x-forwarded-for": `82.40.${ip++}.7` } });
-      ids.push(new URL(res.headers.get("location")!).searchParams.get("bs_click")!);
+      ids.push(new URL(res.headers.get("location")!).searchParams.get("botiny_click")!);
     }
   }
   await new Promise(r => setTimeout(r, 1500));

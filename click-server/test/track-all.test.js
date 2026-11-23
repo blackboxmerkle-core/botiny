@@ -48,7 +48,7 @@ test('resolve: tracking-only rows survive signing-key loss; incentivised ones do
   const { engine, store, cfg } = await setup();
   const s = await issueAll(engine, { r: ranked({ clusters: 3, perCluster: 4 }).map((x, i) => ({ ...x, response_rank: i + 1 })) });
   const kp2 = await generateKeyPair();
-  const e2 = new ClickEngine({ store, cfg, signingKey: kp2.privateKey, kid: 'k2', verifyKeys: { k2: kp2.publicKey }, keySecret: 'x', shortBase: 'https://bsrc.test' });
+  const e2 = new ClickEngine({ store, cfg, signingKey: kp2.privateKey, kid: 'k2', verifyKeys: { k2: kp2.publicKey }, keySecret: 'x', shortBase: 'https://botiny.test' });
   const tr = s.results.find(x => x.tracked_only), inc = s.results.find(x => !x.tracked_only && x.click_incentive_atomic > 0);
   assert.ok(await e2.resolve(tr.short_url.split('/').pop()));
   assert.equal(await e2.resolve(inc.short_url.split('/').pop()), null);

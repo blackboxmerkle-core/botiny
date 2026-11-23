@@ -331,7 +331,6 @@ export function createApp() {
     const jwk = await crypto.subtle.exportKey("jwk", k.publicKey); res.json({ keys: [{ kty: jwk.kty, crv: jwk.crv, x: jwk.x, kid: k.kid, use: "sig", alg: "EdDSA" }] });
   };
   app.get("/.well-known/botiny-keys", wellKnownKeys);
-  app.get("/.well-known/botsource-keys", wellKnownKeys); // previous path
   // Bot proof claim. Bound to the paying wallet via an EIP-191 signed request (X-Bot-Wallet/-Signature/-Timestamp).
   app.post("/v1/proofs", limit("proof", 120, 60), async (req: any, res) => {
     try {

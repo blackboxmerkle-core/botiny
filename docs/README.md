@@ -9,6 +9,7 @@ Status date: 23 November 2026, Europe/London. The product and repository are **B
 | [credits-and-promo-v4.md](credits-and-promo-v4.md) | Prepaid search credits and the promo-v4 ranker (default; older rankers kept for replay) |
 | [mcp-and-data-feed.md](mcp-and-data-feed.md) | MCP server at `POST /mcp` and monthly data-feed subscriptions |
 | [security-fixes-2026-10-13.md](security-fixes-2026-10-13.md) | Security rounds 1–4, 13 October 2026 |
+| [data-rewrite-0012.md](data-rewrite-0012.md) | How historical testnet data stays replayable after the Botiny rename (migration 0012) |
 
 Brand assets used in the root README live in [`../assets/brand/`](../assets/brand/). Screenshots of the mid-October dashboard, crawler and click feed are in [`screenshots/`](screenshots/).
 

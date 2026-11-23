@@ -11,7 +11,7 @@ export async function setup(overrides = {}) {
   const cfg = makeConfig(overrides);
   const kp = await generateKeyPair();
   const store = new MemoryStore();
-  const engine = new ClickEngine({ store, cfg, signingKey: kp.privateKey, kid: 'k1', verifyKeys: { k1: kp.publicKey }, keySecret: 'test-secret', shortBase: 'https://bsrc.test' });
+  const engine = new ClickEngine({ store, cfg, signingKey: kp.privateKey, kid: 'k1', verifyKeys: { k1: kp.publicKey }, keySecret: 'test-secret', shortBase: 'https://botiny.test' });
   return { cfg, store, engine, kp };
 }
 let n = 0;

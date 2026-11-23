@@ -128,6 +128,7 @@ Migrations in `db/migrations/`:
 | 0007–0009 | settle_failed compensation, settle_unknown, settle_review |
 | 0010 | Prepaid search credits |
 | 0011 | Data-feed subscriptions (idempotent `topup_pending.target`) |
+| 0012 | Rewrite the former click-tracking query parameter in non-hash-bound stored text |
 
 The test runner checks the database name before migrating and will refuse to touch a non-`_test` database. The migration runner rejects duplicate number prefixes.
 

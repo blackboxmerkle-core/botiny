@@ -57,7 +57,7 @@ const BROWSER = { "user-agent": "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chro
 let ipn = 1;
 const click = async (short_url: string, headers: Record<string, string> = BROWSER) => {
   const r = await fetch(`${base}/c/${short_url.split("/").pop()}`, { redirect: "manual", headers: { ...headers, "x-forwarded-for": `82.30.${ipn++}.9` } });
-  const id = new URL(r.headers.get("location")!).searchParams.get("bs_click");
+  const id = new URL(r.headers.get("location")!).searchParams.get("botiny_click");
   for (let i = 0; i < 100; i++) { const row = (await pool.query("SELECT * FROM clicks WHERE click_id=$1", [id])).rows[0]; if (row) return row; await new Promise(r => setTimeout(r, 20)); }
   throw new Error("not scored");
 };
