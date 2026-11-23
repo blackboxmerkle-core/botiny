@@ -1,6 +1,8 @@
+> **Note (23 November 2026).** Security rounds 1–4 as shipped on 13 October 2026. The product and repository are **Botiny** ([github.com/blackboxmerkle-core/botiny](https://github.com/blackboxmerkle-core/botiny)). Feature work has been paused since 14 October 2026; leftover optional items listed at the end of this document have not been built.
+>
 # Security audit fixes, 2026-10-13
 
-Scope: `/workspace/bot-rec-market` (api, crawler, click-server integration). x402 verification and EIP-3009 replay
+Scope: the Botiny repository (api, crawler, click-server integration), then at `/workspace/bot-rec-market` on the build box. x402 verification and EIP-3009 replay
 protection are unchanged: the nonce is still reserved in the recommend transaction, the hashed response and ranking
 are untouched, and every logged request still replays MATCH (524/524 after deploy).
 

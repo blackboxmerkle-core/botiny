@@ -1,3 +1,5 @@
+> **Note (23 November 2026).** Crawler design for the project now named **Botiny** ([github.com/blackboxmerkle-core/botiny](https://github.com/blackboxmerkle-core/botiny)). The worker still ships with the historical User-Agent `botsource-crawler/0.1` and a botsource repo URL so existing robots.txt rules keep matching; override `CRAWLER_UA` or update the default when feature work resumes.
+>
 # Bot-service crawler: design
 
 Code: [`crawler/`](../crawler). UI: the **Crawler** tab of the dashboard in `api/` (`/dashboard`, basic auth).

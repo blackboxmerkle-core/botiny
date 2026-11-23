@@ -1,110 +1,136 @@
-# api/ — bot-rec-market API, dashboard, simulators (run all commands from this directory)
+# api/ — Botiny API, dashboard, portal, MCP
 
-Service-discovery marketplace for bots. Providers list services; bots pay (x402, Base Sepolia USDC) for a ranked list.
-Every paid request is logged with its response hash and per-listing impressions in ONE Postgres transaction, and can be replayed.
+TypeScript Express service for the Botiny testnet marketplace. Bots pay (x402 test USDC, or prepaid credits) for a ranked list of services. Every paid request is logged with its response hash and impressions in one Postgres transaction and can be replayed.
+
+The npm package name is still `bot-rec-market` (historical). Run all commands from this directory.
 
 ## Run
-    sudo service postgresql start           # Postgres 17 + pgvector 0.8.0 installed on the box; db botrec, user bot/bot
-    npm install
-    npm run seed                            # 31 listings from db/seed-catalogue.json (source_url per entry)
-    PAYMENT_MODE=mock npm start             # :8402 (default mode is mock)
-    npm test                                # 6 tests (needs the DB)
 
-Env: DATABASE_URL (default postgres://bot:bot@localhost:5432/botrec), PORT, PAYMENT_MODE=mock|x402,
-PAY_TO_ADDRESS (required for x402), FACILITATOR_URL (default https://x402.org/facilitator), PRICE_ATOMIC (default 1000 = 0.001 USDC).
-Network is hard-wired to base-sepolia (USDC 0x036CbD53842c5426634e7929541eC2318f3dCF7e); anything else throws at startup.
+```bash
+# Postgres 17 + pgvector; database botrec, user bot/bot. Tests use botrec_test.
+npm install
+npm run seed                 # 31 listings from db/seed-catalogue.json
+PAYMENT_MODE=mock npm start  # :8402 (mock is also the default if .env is absent)
+npm run start:mock           # force mock mode
+npm test                     # never loads .env; always mock payments on botrec_test
+npm run typecheck
+npm run supervise            # API + ngrok; rewrites PUBLIC_BASE_URL if the tunnel URL changes
+```
+
+The process binds to loopback only (`API_HOST`, default `127.0.0.1,::1`). It is meant to be reached through a local tunnel (ngrok), not exposed on `0.0.0.0`.
+
+Env (from `.env`, git-ignored; start from `.env.example` if present):
+
+- `DATABASE_URL` — default `postgres://bot:bot@localhost:5432/botrec`
+- `PORT` — default 8402
+- `PAYMENT_MODE` — `mock` or `x402`
+- `PAY_TO_ADDRESS` — required for x402
+- `PRICE_ATOMIC` — default 1000 (0.001 USDC)
+- `PUBLIC_BASE_URL` — x402 `resource` URL and short-link base
+- `DASHBOARD_USER` / `DASHBOARD_PASSWORD` — basic auth; the dashboard fails closed if the password is unset
+- `RELAYER_PRIVATE_KEY` / `RELAYER_ADDRESS` — settlement relayer; never the payer key
+- `FACILITATOR_FALLBACK=1` — while the relayer has no test gas, Base Sepolia settlement can go through x402.org; verification stays local
+- `PORTAL_APP_DIR` — portal static files (default is a sibling `botiny-brand/portal-app` directory, outside this repo)
+- `CLICK_ATTEST_CONTRACT`, `ATTEST_PRIVATE_KEY` — optional; attestation stays off and writes nothing to the outbox when unset
+- Click signing: `CLICK_SIGNING_KEY_JWK`, `CLICK_KID`, `CLICK_KEY_SECRET`. If no signing key is configured, links are still issued, all tracking-only, with a per-process ephemeral key.
+
+Never commit `.env` or print private keys.
+
+## Payments and ranking
+
+- **Pay per query:** `POST /v1/recommend` with `X-PAYMENT`. Mock header: `mock:<unique-nonce>[:0xpayer]`. A payment header can be used once (409 on reuse).
+- **Prepaid credits:** `POST /v1/credits/topup` (x402) issues a `bck_…` key on the first settled top-up (shown once; only sha256 is stored). `Authorization: Bearer bck_…` on recommend or MCP debits `query_price_atomic` in the same transaction as the request log. Default pack: 1 test USDC for 1,000 queries. Sending `X-PAYMENT` together with a key uses pay-per-query. See [../docs/credits-and-promo-v4.md](../docs/credits-and-promo-v4.md).
+- **promo-v4** is the live ranker. Older requests replay with the ranker version stored on the row (v4, v3, v2 or v1).
+- **Facilitator:** `src/facilitator.ts` verifies x402 `exact` EIP-3009 payloads locally, then the relayer submits `transferWithAuthorization`. ToS is bound into the nonce.
+- **Chains:** `src/chains.ts` — Base, Ethereum, Arbitrum and OP Sepolia, Polygon Amoy, Avalanche Fuji, Unichain and World Chain Sepolia. Linea Sepolia is disabled. Mainnets are hard-disabled.
 
 ## Endpoints
-- POST /v1/listings {provider_id,name,description,address,kind?,tags?,source_url?,cpi_micro_usdc?,supersedes?} -> {listing_id,catalogue_seq}
-- POST /v1/recommend {query,k?} + header X-PAYMENT -> {request_id,response_hash,response}. No header -> 402 with x402 v1 `accepts`.
-  Mock mode header: `mock:<unique-nonce>[:0xpayer]`. A payment header can be used once (409 on reuse).
-- GET /v1/requests/:id/replay -> recomputes from the pinned snapshot, {logged_hash,replayed_hash,match}
-- GET /v1/requests/:id (audit: request, payment, impressions), GET /v1/audit/providers/:id (impressions + spend per listing)
 
-## Determinism contract
-- Listings are append-only; `seq` is the catalogue version. Request pins `catalogue_seq = max(seq)` inside the transaction; updates = new row with `supersedes`.
-- Embedding: `hbow-fnv1a-256-v1` (signed hashed unigrams+bigrams, L2-normalised, rounded 6dp), stored in pgvector `vector(256)`.
-- Ranking `cosine-ppm-v1`: exact scan (no ANN), score = round(dot*1e6) integer, tie-break score desc then listing_id asc.
-- Canonical JSON: sorted keys, no whitespace, integers only (floats rejected). response_hash = sha256(canonical response body).
-- Replay refuses (409) if the build's embedding model / ranker version differs from the logged one. Keep old versions callable if you change them.
+### Search, audit, health
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/v1/health` | Mode, active chains, public pay-to and relayer addresses |
+| GET | `/v1/chains` | All configured chains and which are active |
+| GET | `/v1/terms`, `/v1/terms/:version`, `/v1/terms/advertiser/:version` | Versioned ToS |
+| POST | `/v1/recommend` | Ranked results; 402 without payment or credits |
+| GET | `/v1/requests/:id` | Audit record (restricted until settled, unless payer proof is presented) |
+| GET | `/v1/requests/:id/replay` | Recomputes the hash; unsettled public replay does not re-rank |
+| POST | `/v1/listings` | Create a listing (basic auth) |
+| GET | `/v1/audit/providers/:id` | Impressions and spend (basic auth) |
+
+### Credits, MCP, data feed
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/v1/credits/pricing` | Pack price and ToS params |
+| POST | `/v1/credits/topup` | Buy a pack; `?rotate_key=1` rotates the key |
+| GET | `/v1/credits/me` | Balance and recent ledger |
+| POST | `/mcp` | MCP streamable HTTP (stateless JSON-RPC). GET/DELETE → 405 |
+| GET | `/v1/feed/tiers` | basic / pro prices and quotas |
+| POST | `/v1/feed/subscribe?tier=basic|pro` | Buy a 30-day period; `bfk_…` key |
+| GET | `/v1/feed/listings`, `/v1/feed/changes`, `/v1/feed/me` | Snapshot, change feed, account |
+
+MCP tools: `botiny_search`, `botiny_listing`, `botiny_credit_balance`. Stdio bridge: `BOTINY_CREDIT_KEY=bck_… BOTINY_MCP_URL=https://<host>/mcp npx tsx src/mcp-stdio.ts`. Details: [../docs/mcp-and-data-feed.md](../docs/mcp-and-data-feed.md).
+
+Scripts that exercise testnet top-ups (`scripts/credits-topup.ts`, `scripts/feed-subscribe.ts`) write keys under `~/.botiny/` (mode 0600) and never print them. They need `PAYER_PRIVATE_KEY` in the environment and cap spend.
+
+### Advertisers and portal
+
+Advertiser auth is a Bearer API key (`adv_…`) or a SIWE session. Cookie-authenticated mutating routes need the `X-Botiny-Client` CSRF header.
+
+- `GET /v1/advertisers/me`, `POST /v1/advertisers/me/topup`
+- `PUT /v1/advertisers/me/listings/:lid/bid`
+- `PUT /v1/advertisers/me/listings/:lid/incentive` — upsert an incentive offer
+- Campaigns: `GET|POST /v1/advertisers/me/campaigns`, listing stats, incentive report (JSON or CSV), attestations
+- `DELETE /v1/advertisers/me/link` — unlink wallet from API key
+- SIWE: `GET /v1/auth/siwe/nonce`, `POST /v1/auth/siwe/verify`, session, logout
+- Suggestions, `GET /v1/bots/me`, per-bot stats and request logs (and CSV), ban appeals
+- Click feed page: `GET /advertiser`
+
+`dry_run` on campaign launch charges only the incremental commitment and never returns a negative balance.
+
+### Clicks
+
+`GET /c/:code`, `/c/:code/preview`, `/r/:token`, `/c/r/:token`, `POST /v1/proofs`. JWKS is at `GET /.well-known/botsource-keys` (historical path). Every recommend result gets `short_url` and `track_url` in a sibling `click_links` field, outside the hashed response.
+
+## Determinism
+
+- Listings are append-only; updates insert a new row with `supersedes`. The request pins `catalogue_seq` and `market_seq`.
+- Embedding: `hbow-fnv1a-256-v1` (hashed unigrams + bigrams, L2-normalised, rounded to 6 decimal places), stored in pgvector `vector(256)`.
+- Ranking uses an exact scan (no ANN). Scores are integer ppm. Tie-break is score desc, then `listing_id` asc (promo-v4 adds band, bid and pacing for sponsored slots only).
+- Canonical JSON: sorted keys, no whitespace, integers only. `response_hash = sha256(canonical body)`.
+- Replay refuses (409) if the build cannot call the logged embedding or ranker version.
 
 ## Transaction order
-verify payment (facilitator /verify or mock) -> BEGIN REPEATABLE READ -> pin snapshot -> rank -> INSERT request (+hashes, payer, payment ref) -> INSERT impressions -> COMMIT -> settle -> UPDATE payment_status.
-`db_txid` (txid_current()) is stored on requests and impressions as proof they were written in the same transaction.
 
-## Real testnet payments (not yet exercised)
-Set PAYMENT_MODE=x402 and PAY_TO_ADDRESS=<your Base Sepolia receiving address>. The server needs no private key.
-A paying test client needs a Base Sepolia wallet private key funded with test ETH and test USDC (faucet.circle.com), e.g. using `x402-fetch`/`x402-axios`.
+verify payment (or credit key) → `BEGIN REPEATABLE READ` → pin snapshot → rank → insert request, hash, impressions, advertiser debits, click links, credit debit → `COMMIT` → settle (x402 only) → update `payment_status`. On `settle_failed`, a follow-up transaction appends compensating rows and voids the request's incentive links. `db_txid` is stored as proof that request and impressions were written together.
 
-## Configured testnet mode (current)
-`.env` (git-ignored; copy in `.env.example`) sets PAYMENT_MODE=x402, PAY_TO_ADDRESS=0x0e66433540a91D9683E939c8Ac17BC084571D050,
-X402_NETWORK=base-sepolia, FACILITATOR_URL=https://x402.org/facilitator. `npm start` loads it (`tsx --env-file=.env`);
-`npm run start:mock` forces mock mode. `npm test` never loads .env, so tests always run in mock mode.
-Verified 10 Oct 2026: x402.org facilitator `/supported` lists v1 exact/base-sepolia; a dummy-signed payload is rejected by
-facilitator /verify with `invalid_exact_evm_signature` (no funds moved, nothing logged).
+## Dashboard
 
-## Dashboard (read-only; basic auth — see "Public exposure" below)
-http://localhost:8402/dashboard/ — tabs: API usage (all /v1 calls incl. 402/409/5xx from `api_log`, 5s auto-refresh),
-Transactions (off-chain payments; on-chain payee/payer USDC balances, USDC Transfer events to payee over the last
-LOG_WINDOW_BLOCKS=3000 blocks in 200-block chunks — the public RPC's getLogs limit — and reconciliation of x402 'settled' rows
-against tx receipts), Requests (detail + "Replay & verify"), Advertisers (impression spend), Catalogue.
-JSON under /dashboard/api/{usage,payments,chain,requests,requests/:id,advertisers,catalogue}. Only public addresses are used
-(PAYER_ADDRESS env, default 0x0b68…5402); PAYER_PRIVATE_KEY is never read by the server.
-Tests use a separate database (botrec_test) and mock payments. Screenshots: `npx tsx scripts/screenshot.ts` -> ../docs/screenshots/.
+`http://localhost:8402/dashboard/` — HTTP basic auth. Tabs include API usage (with prepaid credits, data-feed and click-analytics cards), Bots / Try a search, Financials, Transactions, Requests (detail + replay), Advertisers, Catalogue, Crawler, and Admin (settings, wallets, ToS, bans, incentives, suggestions, audit).
 
-## Public exposure via ngrok (auth added)
-- Public: GET /v1/health, POST /v1/recommend (x402 paywall), GET /v1/requests/:id and /replay (bot-facing audit).
-- HTTP basic auth (DASHBOARD_USER=admin / DASHBOARD_PASSWORD in .env; fails closed if unset): /dashboard/**, POST /v1/listings, GET /v1/audit/providers/:id.
-- PUBLIC_BASE_URL in .env sets the x402 `resource` URL (else derived from the Host header).
-- Tunnel: `/home/box/bin/ngrok http 8402 --config /home/box/.config/ngrok/ngrok.yml,/tmp/ngrok-crl.yml` where the extra file sets
-  `agent.crl_noverify: true` (the box couldn't reach ngrok's CRL endpoint; TLS is still verified, only revocation lookup is skipped).
-  Free-tier URLs change on restart: update PUBLIC_BASE_URL and restart the server. Browsers see ngrok's interstitial once; API clients can send `ngrok-skip-browser-warning: 1`.
+JSON under `/dashboard/api/…`. The server never reads `PAYER_PRIVATE_KEY`. Financials treat credit top-ups and data-feed purchases as cash, not each credit-debited query.
 
-## Financials tab
-/dashboard → Financials (basic auth). JSON: GET /dashboard/api/financials?from=YYYY-MM-DD&to=YYYY-MM-DD&type=bot_query_payment|advertiser_impression_charge&status=settled|verified|settle_failed|accrued&mode=x402|mock|offchain ;
-CSV: /dashboard/api/financials.csv (same filters). Wallet balances (USDC + ETH) are live Base Sepolia reads. Ledger = bot query payments (off-chain status + on-chain receipt)
-UNION advertiser impression charges with charge > 0 (ACCRUED ONLY — advertisers don't pay in yet). Totals: today (Europe/London day), 7d, all-time. Screenshot: `npx tsx scripts/screenshot-fin.ts` (reads .env creds).
+“Try a search” is signed off in production-like configs (it would spend from the payer key). Simulator bots: `npm run sim:start` / `sim:stop` (needs `PAYER_PRIVATE_KEY`, testnet-only, daily budget caps).
 
-## Simulator bots (live testnet traffic)
-- `npm run sim:start` — background process running `research-bot` and `dev-bot` (X-Bot-Id header), each making a REAL x402 payment on Base Sepolia
-  every 1–3 min (SIM_MIN_MS/SIM_MAX_MS) to PUBLIC_BASE_URL (re-read from .env each call). ~15% off-catalogue queries; 25% of steps replay-verify a past request instead.
-- Safety: only pays exact/base-sepolia/testnet-USDC requirements ≤ 0.01 USDC; per-bot daily budget 0.5 USDC (SIM_DAILY_BUDGET_ATOMIC, tracked in logs/sim-state.json);
-  global stop if payer USDC < 1. Key from PAYER_PRIVATE_KEY only, never logged.
-- `npm run sim:stop` — graceful SIGTERM via logs/sim.pid. Logs: logs/sim-research-bot.log, logs/sim-dev-bot.log (JSON lines), logs/sim-main.log.
-- `npm run supervise` — scripts/supervise.sh keeps server + ngrok alive (30s checks), rewrites PUBLIC_BASE_URL and restarts the server if the ngrok URL changes. Stop: `kill $(cat logs/supervise.pid)`.
-- Dashboard: per-bot table + bot filter on API usage; bot filter, "Query revenue by bot" and bot column on Financials; bot shown in Requests.
+## Schema
 
-## Advertiser marketplace (ranker `promo-v2`)
-**Money flow (Base Sepolia TESTNET only).** Bots pay `query_price_atomic` per search (searcher fee). Advertisers prepay test USDC into an
-append-only `balance_ledger` via x402 (`POST /v1/advertisers/me/topup?amount_atomic=1000..100000`, credited only after on-chain settlement),
-or receive admin manual credits (testing only, no funds moved). Sponsored impressions debit `fixed_cpi_atomic + bid` from the balance
-in the SAME DB transaction as the request, response hash and impressions; the transaction asserts no balance went negative.
+Migrations in `db/migrations/`:
 
-**Ranking formula (deterministic, admin-configurable, versioned):**
-1. Qualify: `score_ppm >= relevance_threshold_ppm` (cosine × 1e6), and listing not paused. Nothing below threshold is ever shown.
-2. Promotion candidates: qualified listings whose provider has an advertiser account and a bid > 0;
-   `promo_score = score_ppm + bid_weight_ppm_per_atomic × min(bid, max_bid_atomic)`; sort by promo_score desc, listing_id asc.
-3. Walk candidates, granting up to `min(promoted_slots, k)` slots to those whose remaining balance (as of the pinned market_seq,
-   minus earlier grants in this response) ≥ `fixed_cpi_atomic + bid`. Granted entries take the FIRST slots, carry
-   `sponsored:true, label:"Sponsored", advertiser, bid_atomic, promo_score_ppm`, and are charged.
-4. All other qualified listings are organic: by score desc, listing_id asc, **free** — including unfunded advertisers, which
-   therefore rank lower than when promoted (they lose the top slots and the bid boost).
-Defaults (settings v1): query price 1000 (0.001 USDC), fixed CPI 100, threshold 150000, 2 slots, bid weight 200 ppm/atomic, max bid 5000.
+| # | What |
+|---|---|
+| 0001–0002 | Click incentives and escrow settlement |
+| 0003 | Incentive pool and pacing (no-refund policy) |
+| 0004 | Track every result |
+| 0005 | Portal (SIWE, suggestions, campaigns) |
+| 0006 | Click attestation outbox |
+| 0007–0009 | settle_failed compensation, settle_unknown, settle_review |
+| 0010 | Prepaid search credits |
+| 0011 | Data-feed subscriptions (idempotent `topup_pending.target`) |
 
-**Replay determinism.** Each request pins `catalogue_seq`, `market_seq` (shared sequence over balance_ledger + listing_bid_events),
-`settings_version`, embedding model and ranker version. All writers and paid requests serialize on one advisory lock, so the
-committed state at `market_seq` is exact; replay recomputes balances/bids as of that point. v1 requests still replay with ranker v1.
+The test runner checks the database name before migrating and will refuse to touch a non-`_test` database. The migration runner rejects duplicate number prefixes.
 
-**APIs.** Admin (basic auth, dashboard Admin tab): `/dashboard/api/admin/{state,settings,advertisers,advertisers/:id/credit,listings/:lid}`.
-Advertiser (Bearer API key, shown once at creation): `GET /v1/advertisers/me`, `PUT /v1/advertisers/me/listings/:lid/bid`, `POST /v1/advertisers/me/topup`.
-Dashboard "Bots · Try a search" (`POST /dashboard/api/try`) makes a real x402 call server-side as research-bot/dev-bot (payer key stays server-side, ≤0.01 USDC, testnet).
+## Tests and helpers
 
-**Simulated advertisers.** `adv:sim-scout` and `adv:sim-forge` (in sim-bots.ts) top up 0.005 USDC at a time from the payer wallet when
-balance < 0.002, at most every 20 min, lifetime cap 0.05 USDC each; they random-walk bids (200–1200 atomic). Keys in logs/sim-advertisers.json (gitignored).
-
-## Dashboard history & settlement errors
-Requests, payments and bot-history lists are keyset-paginated (`?limit=1..500&before=<ISO received_at>&q=<id or query text>`;
-`X-Next-Before` / `next_before` cursor, "Load older" buttons, search box). Only the Usage tab auto-refreshes, so expanded lists keep their state.
-On-chain receipt statuses are cached permanently once final and fetched in parallel. Failed settlements store the facilitator's
-reason in `requests.settle_error` (returned as `reason` in the 402). Rows from before 11 Oct 2026 have no recorded reason.
-`npx tsx scripts/check-dashboard.ts` walks every tab via the public URL and reports JS/HTTP errors.
+`npm test` runs `test/*.test.ts` serially against `botrec_test`. Related docs and scripts: `scripts/replay-all.ts`, `scripts/credits-topup.ts`, `scripts/feed-subscribe.ts`, `scripts/screenshot.ts`.

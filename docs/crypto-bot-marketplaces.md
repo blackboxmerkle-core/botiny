@@ -1,3 +1,5 @@
+> **Note (23 November 2026).** Historical landscape notes for the project now named **Botiny** ([github.com/blackboxmerkle-core/botiny](https://github.com/blackboxmerkle-core/botiny)).
+>
 # Crypto-Settled Marketplaces for AI Agents and Bots
 
 *Research brief, prepared 10 October 2026 (Europe/London). Sources are official sites and docs unless marked otherwise, all accessed 10 Oct 2026. A figure appears only where a source states it. "Not stated" means none of the sources I reviewed gave the figure.*

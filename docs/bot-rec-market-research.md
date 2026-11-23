@@ -1,3 +1,5 @@
+> **Note (23 November 2026).** Historical research notes for the project now named **Botiny** ([github.com/blackboxmerkle-core/botiny](https://github.com/blackboxmerkle-core/botiny)). See the [root README](../README.md) for current status.
+>
 # Bot Product-Recommendation Market: Research (data, storage, distribution)
 
 Prepared 10 Oct 2026 (Europe/London). Builds on `/workspace/crypto-bot-marketplaces.md`.
