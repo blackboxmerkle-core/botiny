@@ -131,7 +131,7 @@ export function financialsRouter() {
     const cols = ["at", "bot_id", "type", "status", "mode", "counterparty", "amount_atomic", "amount_usdc", "request_id", "settle_tx", "listing_id", "rank", "kind"];
     const cell = (v: any) => { const s = v == null ? "" : v instanceof Date ? v.toISOString() : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
     const csv = [cols.join(","), ...rows.map(x => cols.map(c => cell(c === "amount_usdc" ? (Number(x.amount_atomic) / 1e6).toFixed(6) : x[c])).join(","))].join("\n");
-    res.set("content-type", "text/csv").set("content-disposition", `attachment; filename="bot-rec-market-ledger-testnet.csv"`).send(csv + "\n");
+    res.set("content-type", "text/csv").set("content-disposition", `attachment; filename="botiny-ledger-testnet.csv"`).send(csv + "\n");
   });
   return r;
 }

@@ -1,5 +1,5 @@
 -- Click server + incentive tables. Separate from api/db/schema.sql's balance_ledger (per-impression debits).
--- Apply only to a test DB here (clickserver_test). Integration with botrec is a later, reviewed migration.
+-- Apply only to a test DB here (clickserver_test). Integration with the Botiny API database is a later, reviewed migration.
 CREATE SEQUENCE IF NOT EXISTS incentive_seq;
 
 CREATE TABLE IF NOT EXISTS harvest_tokens (

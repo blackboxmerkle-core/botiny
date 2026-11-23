@@ -28,7 +28,7 @@ const item = (o: Partial<NormItem>): NormItem => ({ source_id: "x402-bazaar", so
   type: "x402", name: "Thing", urls: { primary: "https://svc.example.test/a" }, keys: ["url:https://svc.example.test/a"], ...o } as NormItem);
 
 test("robots.txt matcher: longest match, Allow beats Disallow, our UA group preferred", () => {
-  const r = "User-agent: *\nDisallow: /private\nAllow: /private/ok\n\nUser-agent: botsource-crawler\nDisallow: /nobots\n";
+  const r = "User-agent: *\nDisallow: /private\nAllow: /private/ok\n\nUser-agent: BotinyCrawler\nDisallow: /nobots\n";
   assert.equal(isAllowed(r, "/private/x"), true, "own group used, * group ignored");
   assert.equal(isAllowed(r, "/nobots/a"), false);
   assert.equal(isAllowed("User-agent: *\nDisallow: /private\nAllow: /private/ok", "/private/ok/1"), true);
@@ -106,7 +106,7 @@ test("free 402 probe: one unpaid request, decodes challenge, never sends a payme
   assert.equal(rb.error, "robots.txt disallows");
   const hits = seen.filter(s => s.url !== "/robots.txt");
   assert.equal(hits.length, 1, "exactly one request to the paid endpoint; blocked path never fetched");
-  for (const s of seen) { assert.ok(!s.headers["x-payment"] && !s.headers["payment-signature"]); assert.match(String(s.headers["user-agent"]), /botsource-crawler.*github\.com/); }
+  for (const s of seen) { assert.ok(!s.headers["x-payment"] && !s.headers["payment-signature"]); assert.match(String(s.headers["user-agent"]), /BotinyCrawler.*github\.com/); }
   const [it] = await q("SELECT pricing FROM crawl_items WHERE item_id=$1", [ok.item_id]);
   assert.equal(it.pricing.probe.ok_402, true);
   _safeFetchAllowForTests([]);

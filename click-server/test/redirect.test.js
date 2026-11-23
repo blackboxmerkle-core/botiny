@@ -16,7 +16,7 @@ test('GET /:code -> 302 to stored dest, async enqueue, no cookies', async () => 
   const { h, queued, set } = await env();
   const r0 = set.results[0]; const code = r0.short_url.split('/').pop();
   assert.match(code, /^[0-9A-Za-z]{12}$/);
-  const res = await h(new Request(`https://bsrc.test/${code}`, { headers: { 'user-agent': 'Mozilla/5.0', 'cf-connecting-ip': '81.2.3.4' } }), { trustCf: true }, ctx);
+  const res = await h(new Request(`https://botiny.test/${code}`, { headers: { 'user-agent': 'Mozilla/5.0', 'cf-connecting-ip': '81.2.3.4' } }), { trustCf: true }, ctx);
   assert.equal(res.status, 302);
   const loc = new URL(res.headers.get('location'));
   assert.equal(loc.origin + loc.pathname, 'https://p0.example/l0'); assert.match(loc.searchParams.get('bs_click'), /^ck_/);
@@ -27,25 +27,27 @@ test('GET /:code -> 302 to stored dest, async enqueue, no cookies', async () => 
 test('cf-connecting-ip ignored unless trustCf; falls back to env.clientIp', async () => {
   const { h, queued, set } = await env();
   const code = set.results[0].short_url.split('/').pop();
-  await h(new Request(`https://bsrc.test/${code}`, { headers: { 'cf-connecting-ip': '6.6.6.6' } }), { clientIp: '81.2.3.9' }, ctx);
+  await h(new Request(`https://botiny.test/${code}`, { headers: { 'cf-connecting-ip': '6.6.6.6' } }), { clientIp: '81.2.3.9' }, ctx);
   await Promise.all(waits);
   assert.equal(queued.at(-1).ip, '81.2.3.9');
 });
 test('GET /r/:token works; tampered/unknown -> 404, no open redirect', async () => {
   const { h, set } = await env();
   const t = set.results[1].harvest_token;
-  assert.equal((await h(new Request(`https://bsrc.test/r/${t}`), {}, ctx)).status, 302);
-  assert.equal((await h(new Request(`https://bsrc.test/r/${t.slice(0, -3)}AAA`), {}, ctx)).status, 404);
-  assert.equal((await h(new Request(`https://bsrc.test/r/${t}?to=https://evil.example`), {}, ctx)).headers.get('location').startsWith('https://p1.example/'), true);
-  assert.equal((await h(new Request('https://bsrc.test/ZZZZZZZZZZZZ'), {}, ctx)).status, 404);
+  assert.equal((await h(new Request(`https://botiny.test/r/${t}`), {}, ctx)).status, 302);
+  assert.equal((await h(new Request(`https://botiny.test/r/${t.slice(0, -3)}AAA`), {}, ctx)).status, 404);
+  assert.equal((await h(new Request(`https://botiny.test/r/${t}?to=https://evil.example`), {}, ctx)).headers.get('location').startsWith('https://p1.example/'), true);
+  assert.equal((await h(new Request('https://botiny.test/ZZZZZZZZZZZZ'), {}, ctx)).status, 404);
 });
 test('preview page for unfurlers, JWKS endpoint', async () => {
   const { h, set } = await env();
   const code = set.results[0].short_url.split('/').pop();
-  const res = await h(new Request(`https://bsrc.test/${code}/preview`), {}, ctx);
+  const res = await h(new Request(`https://botiny.test/${code}/preview`), {}, ctx);
   assert.equal(res.status, 200); assert.match(await res.text(), /Incentivised listing/);
-  const j = await (await h(new Request('https://bsrc.test/.well-known/botsource-keys'), {}, ctx)).json();
+  const j = await (await h(new Request('https://botiny.test/.well-known/botiny-keys'), {}, ctx)).json();
   assert.equal(j.keys[0].kid, 'k1'); assert.equal(j.keys[0].d, undefined);
+  const prev = await (await h(new Request('https://botiny.test/.well-known/botsource-keys'), {}, ctx)).json();
+  assert.deepEqual(prev, j);
 });
 const W = '0x00000000000000000000000000000000000000b0';
 // Fake EIP-191 verifier for unit tests (the API uses viem's real verifyMessage).
@@ -64,7 +66,7 @@ const postProof = async (h, body, { wallet = W, sign = true, ts = Math.floor(Dat
     const msg = await canonicalMessage({ method: 'POST', path: '/v1/proofs', wallet, timestamp: String(ts), body: raw });
     headers['x-bot-signature'] = sigOverride ?? fakeSig(msg, wallet); headers['x-bot-timestamp'] = String(ts);
   }
-  return h(new Request('https://bsrc.test/v1/proofs', { method: 'POST', headers, body: raw }), {}, ctx);
+  return h(new Request('https://botiny.test/v1/proofs', { method: 'POST', headers, body: raw }), {}, ctx);
 };
 
 test('POST /v1/proofs: signed binding to paying wallet, dedupe, channel validation', async () => {
@@ -84,7 +86,7 @@ test('signed requests: bad signature, stale timestamp, replay, tampered body rej
   // replay the exact same signed request
   const raw = JSON.stringify({ token: t, channel: 'bot', artefact: 'r' }); const ts = String(Math.floor(Date.now() / 1000));
   const msg = await canonicalMessage({ method: 'POST', path: '/v1/proofs', wallet: W, timestamp: ts, body: raw });
-  const mk = (b = raw) => h(new Request('https://bsrc.test/v1/proofs', { method: 'POST', headers: { 'x-bot-wallet': W, 'x-bot-signature': fakeSig(msg, W), 'x-bot-timestamp': ts }, body: b }), {}, ctx);
+  const mk = (b = raw) => h(new Request('https://botiny.test/v1/proofs', { method: 'POST', headers: { 'x-bot-wallet': W, 'x-bot-signature': fakeSig(msg, W), 'x-bot-timestamp': ts }, body: b }), {}, ctx);
   assert.equal((await mk()).status, 201);
   assert.equal(((await (await mk()).json()).error), 'replayed_signature');
   // tampered body (signature covers body hash)

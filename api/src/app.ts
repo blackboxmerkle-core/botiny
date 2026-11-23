@@ -326,10 +326,12 @@ export function createApp() {
   app.get("/c/:code/preview", limit("click", 300), (req, res) => clickHandler(req, res, "/" + req.params.code + "/preview"));
   app.get("/r/:token", limit("click", 300), (req, res) => clickHandler(req, res, "/r/" + req.params.token));
   app.get("/c/r/:token", limit("click", 300), (req, res) => clickHandler(req, res, "/r/" + req.params.token));   // track_url = CLICK_SHORT_BASE + /r/<token>
-  app.get("/.well-known/botsource-keys", async (_req, res) => {
+  const wellKnownKeys = async (_req: any, res: any) => {
     const k = await clickKeys(); if (!k) return res.json({ keys: [] });
     const jwk = await crypto.subtle.exportKey("jwk", k.publicKey); res.json({ keys: [{ kty: jwk.kty, crv: jwk.crv, x: jwk.x, kid: k.kid, use: "sig", alg: "EdDSA" }] });
-  });
+  };
+  app.get("/.well-known/botiny-keys", wellKnownKeys);
+  app.get("/.well-known/botsource-keys", wellKnownKeys); // previous path
   // Bot proof claim. Bound to the paying wallet via an EIP-191 signed request (X-Bot-Wallet/-Signature/-Timestamp).
   app.post("/v1/proofs", limit("proof", 120, 60), async (req: any, res) => {
     try {

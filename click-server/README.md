@@ -2,7 +2,7 @@
 
 Click tokens, short-link redirects, click scoring and the incentive ledger for Botiny. The original prototype in this folder has been integrated into `api/` (recommend issues links, the API serves `/c` and `/r` routes, and settlement runs under the API's locks). This package remains the engine, tests, and a local adapter.
 
-The npm package name is still `bot-source-click-server`. The JWKS path is still `GET /.well-known/botsource-keys` so existing clients keep working.
+The npm package name is `botiny-click-server`. The JWKS path is `GET /.well-known/botiny-keys`.
 
 Background specs (outside this repo): `Click_Server_Spec.md`, `Incentive_Math_Model_v3.md`, `Proof_of_Publishing.md`. Farcaster and sale/conversion incentives are out of scope.
 
@@ -14,7 +14,7 @@ Background specs (outside this repo): `Click_Server_Spec.md`, `Incentive_Math_Mo
 - `src/classify.js` — unfurler / crawler / headless / datacentre / header checks; cookie-free end-user key (daily-salted hash of IP /24|/48 + UA + Accept-Language).
 - `src/engine.js` — issue sets, resolve links, score clicks, clawbacks, proofs.
 - `src/ledger.js` — append-only `incentive_ledger` (accrue_held → release / review_hold → review_cleared / clawback), 14-day holdback.
-- `src/worker.js` — `fetch(request, env, ctx)` handler: `GET /:code`, `GET /:code/preview`, `GET /r/:token`, `POST /v1/proofs`, `GET /.well-known/botsource-keys`. 302 first; logging via `ctx.waitUntil`.
+- `src/worker.js` — `fetch(request, env, ctx)` handler: `GET /:code`, `GET /:code/preview`, `GET /r/:token`, `POST /v1/proofs`, `GET /.well-known/botiny-keys`. 302 first; logging via `ctx.waitUntil`.
 - `src/node-server.js` — local adapter on 127.0.0.1 with an ephemeral key and an in-memory store.
 - `src/pg-store.js` — Postgres store used by the API under `CLICK_LEDGER_LOCK`.
 - `src/binding.js` — EIP-191 signed bot requests (`X-Bot-Wallet`, `X-Bot-Timestamp`, `X-Bot-Signature`). Unsigned proofs are off by default.

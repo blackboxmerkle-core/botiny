@@ -1,8 +1,8 @@
-> **Note (23 November 2026).** This is the original design draft (10 October 2026) for the project now named **Botiny**, repository [github.com/blackboxmerkle-core/botiny](https://github.com/blackboxmerkle-core/botiny) (renamed from botsource). Companion research files in this folder are [bot-rec-market-research.md](bot-rec-market-research.md) and [crypto-bot-marketplaces.md](crypto-bot-marketplaces.md). For the current product (prepaid credits, promo-v4, MCP, data feed, portal, click tracking, security rounds) start at the [root README](../README.md) and the “Current” docs in [README.md](README.md).
+> **Note (23 November 2026).** This is the original design draft (10 October 2026) for **Botiny**, repository [github.com/blackboxmerkle-core/botiny](https://github.com/blackboxmerkle-core/botiny). Companion research files in this folder are [original-research.md](original-research.md) and [crypto-bot-marketplaces.md](crypto-bot-marketplaces.md). For the current product (prepaid credits, promo-v4, MCP, data feed, portal, click tracking, security rounds) start at the [root README](../README.md) and the “Current” docs in [README.md](README.md).
 >
 # Bot Product-Recommendation Market on Base: Product Design
 
-Draft, 10 Oct 2026. Companion files: [bot-rec-market-research.md](bot-rec-market-research.md) (sources) and [crypto-bot-marketplaces.md](crypto-bot-marketplaces.md) (landscape).
+Draft, 10 Oct 2026. Companion files: [original-research.md](original-research.md) (sources) and [crypto-bot-marketplaces.md](crypto-bot-marketplaces.md) (landscape).
 All prices below are **proposals**, not market data. Protocol facts are cited.
 
 ## 1. Product in one line

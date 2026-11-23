@@ -8,7 +8,7 @@ import { canonicalize } from "./canonical";
  *  The bot sends X-TOS-ACCEPT: <tosHash> and X-TOS-SALT: <salt>; the on-chain authorization therefore proves acceptance. */
 export type TosKind = "bot" | "advertiser";
 const DRAFT = (who: string, extra: string) => `DRAFT — PLACEHOLDER TERMS — NOT LEGAL ADVICE — NOT FINAL
-bot-rec-market ${who} Terms of Service (testnet prototype)
+Botiny ${who} Terms of Service (testnet prototype)
 
 This is draft placeholder text for a testnet prototype. It has not been reviewed by a lawyer and is not legal advice.
 

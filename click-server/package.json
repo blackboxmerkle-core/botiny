@@ -1,11 +1,11 @@
 {
-  "name": "bot-source-click-server",
+  "name": "botiny-click-server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Click server + incentive ledger for the bot recommendation market (prototype, testnet only)",
+  "description": "Click server + incentive ledger for Botiny (prototype, testnet only)",
   "scripts": {
-    "test": "node --test test/",
+    "test": "node --test test/*.js",
     "start": "node src/node-server.js",
     "schema:test": "psql postgres://bot:bot@localhost:5432/clickserver_test -v ON_ERROR_STOP=1 -f db/schema.sql"
   }

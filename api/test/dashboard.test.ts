@@ -18,7 +18,7 @@ test("dashboard serves HTML and read-only JSON APIs", async () => {
   await fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json" }, body: "{\"query\":\"dash\"}" }); // 402
   const ok = await (await fetch(base + "/v1/recommend", { method: "POST", headers: { "content-type": "application/json", "X-TOS-ACCEPT": TOSH, "X-PAYMENT": "mock:dash" + Date.now() }, body: "{\"query\":\"github issues mcp\",\"k\":2}" })).json();
   await new Promise(r => setTimeout(r, 100)); // api_log write is async
-  assert.match(await (await get("/dashboard/")).text(), /bot-rec-market/);
+  assert.match(await (await get("/dashboard/")).text(), /Botiny/);
   const u = await (await get("/dashboard/api/usage")).json();
   assert.ok(u.by_route.some((r: any) => r.status === 402 && r.route === "/v1/recommend"));
   assert.ok(u.recent.some((r: any) => r.request_id === ok.request_id));

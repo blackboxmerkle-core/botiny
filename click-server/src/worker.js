@@ -9,8 +9,8 @@ const esc = s => String(s).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 export function makeHandler(engine, { enqueue, jwks = [] }) {
   return async function fetch(request, env = {}, ctx = { waitUntil: p => p }) {
     const url = new URL(request.url); const p = url.pathname;
-    if (p === '/' ) return new Response('Bot Source short links. Privacy: no cookies, no JS; truncated, salted-hash request data used for fraud prevention. See /privacy.', { headers: SEC });
-    if (p === '/.well-known/botsource-keys') return json(200, { keys: jwks });
+    if (p === '/' ) return new Response('Botiny short links. Privacy: no cookies, no JS; truncated, salted-hash request data used for fraud prevention. See /privacy.', { headers: SEC });
+    if (p === '/.well-known/botiny-keys' || p === '/.well-known/botsource-keys') return json(200, { keys: jwks }); // second path: previous
     if (p === '/v1/proofs' && request.method === 'POST') {
       let body, rawBody; try { rawBody = await request.text(); body = JSON.parse(rawBody); } catch { return json(400, { error: 'bad_json' }); }
       const r = await engine.submitProof({ body, rawBody, headers: Object.fromEntries(request.headers) });

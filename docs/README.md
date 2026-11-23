@@ -1,6 +1,6 @@
 # docs/ — Botiny documentation
 
-Status date: 23 November 2026, Europe/London. The product and repository are **Botiny** ([github.com/blackboxmerkle-core/botiny](https://github.com/blackboxmerkle-core/botiny)). Earlier docs used the working names botsource and bot-rec-market.
+Status date: 23 November 2026, Europe/London. The product and repository are **Botiny** ([github.com/blackboxmerkle-core/botiny](https://github.com/blackboxmerkle-core/botiny)).
 
 ## Current
 
@@ -18,8 +18,8 @@ These describe the original design and market research. They have not been rewri
 
 | Doc | What |
 |---|---|
-| [bot-rec-market-design.md](bot-rec-market-design.md) | Original product design (10 October 2026) |
-| [bot-rec-market-research.md](bot-rec-market-research.md) | Research notes and sources |
+| [original-design.md](original-design.md) | Original product design (10 October 2026) |
+| [original-research.md](original-research.md) | Research notes and sources |
 | [bot-service-crawler-design.md](bot-service-crawler-design.md) | Crawler design |
 | [crypto-bot-marketplaces.md](crypto-bot-marketplaces.md) | Landscape of crypto bot marketplaces |
 

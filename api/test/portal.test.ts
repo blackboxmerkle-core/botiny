@@ -276,7 +276,7 @@ test("portal front end served same-origin at /portal (static allow-list, no CORS
   const si = await fetch(base + "/portal/signin.html"); assert.equal(si.status, 200); assert.equal(si.headers.get("access-control-allow-origin"), null);
   assert.equal((await fetch(base + "/portal/assets/app.js")).status, 200);
   assert.match((await fetch(base + "/portal/assets/config.js").then(r => r.text())), /apiBase: ""/);
-  for (const p of ["/portal/serve.py", "/portal/README.md", "/portal/test_fixtures.py", "/portal/..%2f..%2fbot-rec-market%2fapi%2f.env", "/portal/assets/../serve.py"]) assert.equal((await fetch(base + p)).status, 404, p);
+  for (const p of ["/portal/serve.py", "/portal/README.md", "/portal/test_fixtures.py", "/portal/..%2f..%2fapi%2f.env", "/portal/assets/../serve.py"]) assert.equal((await fetch(base + p)).status, 404, p);
   const pre = await fetch(base + "/v1/auth/session", { method: "OPTIONS", headers: { origin: "https://evil.example.com", "access-control-request-method": "GET" } });
   assert.equal(pre.headers.get("access-control-allow-origin"), null, "CORS stays off");
 });

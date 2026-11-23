@@ -2,17 +2,17 @@
 
 TypeScript Express service for the Botiny testnet marketplace. Bots pay (x402 test USDC, or prepaid credits) for a ranked list of services. Every paid request is logged with its response hash and impressions in one Postgres transaction and can be replayed.
 
-The npm package name is still `bot-rec-market` (historical). Run all commands from this directory.
+The npm package name is `botiny-api`. Run all commands from this directory.
 
 ## Run
 
 ```bash
-# Postgres 17 + pgvector; database botrec, user bot/bot. Tests use botrec_test.
+# Postgres 17 + pgvector; database botiny, role bot/bot. Tests use botiny_test.
 npm install
 npm run seed                 # 31 listings from db/seed-catalogue.json
 PAYMENT_MODE=mock npm start  # :8402 (mock is also the default if .env is absent)
 npm run start:mock           # force mock mode
-npm test                     # never loads .env; always mock payments on botrec_test
+npm test                     # never loads .env; always mock payments on botiny_test
 npm run typecheck
 npm run supervise            # API + ngrok; rewrites PUBLIC_BASE_URL if the tunnel URL changes
 ```
@@ -21,7 +21,7 @@ The process binds to loopback only (`API_HOST`, default `127.0.0.1,::1`). It is 
 
 Env (from `.env`, git-ignored; start from `.env.example` if present):
 
-- `DATABASE_URL` — default `postgres://bot:bot@localhost:5432/botrec`
+- `DATABASE_URL` — default `postgres://bot:bot@localhost:5432/botiny`
 - `PORT` — default 8402
 - `PAYMENT_MODE` — `mock` or `x402`
 - `PAY_TO_ADDRESS` — required for x402
@@ -92,7 +92,7 @@ Advertiser auth is a Bearer API key (`adv_…`) or a SIWE session. Cookie-authen
 
 ### Clicks
 
-`GET /c/:code`, `/c/:code/preview`, `/r/:token`, `/c/r/:token`, `POST /v1/proofs`. JWKS is at `GET /.well-known/botsource-keys` (historical path). Every recommend result gets `short_url` and `track_url` in a sibling `click_links` field, outside the hashed response.
+`GET /c/:code`, `/c/:code/preview`, `/r/:token`, `/c/r/:token`, `POST /v1/proofs`. JWKS is at `GET /.well-known/botiny-keys`. Every recommend result gets `short_url` and `track_url` in a sibling `click_links` field, outside the hashed response.
 
 ## Determinism
 
@@ -133,4 +133,4 @@ The test runner checks the database name before migrating and will refuse to tou
 
 ## Tests and helpers
 
-`npm test` runs `test/*.test.ts` serially against `botrec_test`. Related docs and scripts: `scripts/replay-all.ts`, `scripts/credits-topup.ts`, `scripts/feed-subscribe.ts`, `scripts/screenshot.ts`.
+`npm test` runs `test/*.test.ts` serially against `botiny_test`. Related docs and scripts: `scripts/replay-all.ts`, `scripts/credits-topup.ts`, `scripts/feed-subscribe.ts`, `scripts/screenshot.ts`.

@@ -1,4 +1,4 @@
-> **Note (23 November 2026).** Crawler design for the project now named **Botiny** ([github.com/blackboxmerkle-core/botiny](https://github.com/blackboxmerkle-core/botiny)). The worker still ships with the historical User-Agent `botsource-crawler/0.1` and a botsource repo URL so existing robots.txt rules keep matching; override `CRAWLER_UA` or update the default when feature work resumes.
+> **Note (23 November 2026).** Crawler design for **Botiny** ([github.com/blackboxmerkle-core/botiny](https://github.com/blackboxmerkle-core/botiny)). The live User-Agent is `BotinyCrawler/0.1 (+https://github.com/blackboxmerkle-core/botiny; …)`.
 >
 # Bot-service crawler: design
 
@@ -58,7 +58,7 @@ The kinds are `sync` (per source), `postprocess` (score, dedupe, probe, rescore,
 Every minute, the scheduler enqueues a sync for each enabled, unpaused source whose `interval_min` has passed.
 `crawl_hosts.next_allowed_at` enforces per-host rate limits across workers: 1–1.5 s for APIs and 2 s for probes.
 robots.txt is cached for 24 hours and checked before any page or probe fetch. Documented JSON APIs are fetched directly.
-The User-Agent is `botsource-crawler/0.1 (+https://github.com/blackboxmerkle-core/botsource; …)`.
+The User-Agent is `BotinyCrawler/0.1 (+https://github.com/blackboxmerkle-core/botiny; …)`.
 
 ## 7. Feeding the recommend catalogue (replay-safe)
 

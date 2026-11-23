@@ -2,7 +2,7 @@
 >
 # Bot Product-Recommendation Market: Research (data, storage, distribution)
 
-Prepared 10 Oct 2026 (Europe/London). Builds on `/workspace/crypto-bot-marketplaces.md`.
+Prepared 10 Oct 2026 (Europe/London). Builds on [crypto-bot-marketplaces.md](crypto-bot-marketplaces.md).
 Conventions: every figure is cited inline to the page it came from (checked 9–10 Oct 2026, unless noted otherwise). **ESTIMATE** marks anything I calculated or assumed. "Not verified" means I couldn't load the page or confirm the figure.
 
 ---

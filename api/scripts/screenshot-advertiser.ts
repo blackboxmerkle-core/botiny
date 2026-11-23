@@ -1,5 +1,5 @@
-// Renders docs/screenshots/advertiser-click-feed.png from DEMO data in botrec_test + a local anvil chain.
-//   DATABASE_URL=postgres://bot:bot@localhost:5432/botrec_test PAYMENT_MODE=mock npx tsx scripts/screenshot-advertiser.ts
+// Renders docs/screenshots/advertiser-click-feed.png from DEMO data in botiny_test + a local anvil chain.
+//   DATABASE_URL=postgres://bot:bot@localhost:5432/botiny_test PAYMENT_MODE=mock npx tsx scripts/screenshot-advertiser.ts
 import "../test/helpers/testdb";
 import { spawn } from "node:child_process";
 import { join } from "node:path"; import { homedir } from "node:os";

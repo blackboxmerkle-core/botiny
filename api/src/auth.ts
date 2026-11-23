@@ -22,7 +22,7 @@ export function basicAuth(): RequestHandler {
   return (req, res, next) => {
     res.set("Cache-Control", "no-store").set("X-Frame-Options", "DENY").set("Content-Security-Policy", "frame-ancestors 'none'").set("X-Content-Type-Options", "nosniff").set("Referrer-Policy", "same-origin");
     const user = process.env.DASHBOARD_USER || "admin", pass = process.env.DASHBOARD_PASSWORD;
-    const deny = () => res.set("WWW-Authenticate", 'Basic realm="bot-rec-market"').status(401).json({ error: "auth required" });
+    const deny = () => res.set("WWW-Authenticate", 'Basic realm="Botiny"').status(401).json({ error: "auth required" });
     if (!passwordStrong(pass)) { if (!warned) { console.error("admin auth disabled: DASHBOARD_PASSWORD missing or weak (need >= 16 chars, 3 classes)"); warned = true; } return deny(); }
     const ip = String(req.ip ?? req.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
     const now = Date.now(); let f = fails.get(ip);

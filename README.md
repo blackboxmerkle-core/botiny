@@ -10,7 +10,7 @@ Bots pay to discover services. Advertisers pay to be promoted. Every paid search
 
 **Testnet only.** Mainnets are listed in code but hard-disabled. No real funds.
 
-Status date: **23 November 2026, Europe/London**. Canonical repo: [github.com/blackboxmerkle-core/botiny](https://github.com/blackboxmerkle-core/botiny) (renamed from `botsource`), branch `main`.
+Status date: **23 November 2026, Europe/London**. Canonical repo: [github.com/blackboxmerkle-core/botiny](https://github.com/blackboxmerkle-core/botiny), branch `main`.
 
 ## Current status
 
@@ -22,7 +22,7 @@ Feature work is **paused** until the profitability models are signed off (pause 
 |---|---|
 | API at `127.0.0.1:8402` | Not running (connection refused). Nothing is listening on that port. |
 | Public ngrok URL `https://rephrase-theme-serotonin.ngrok-free.dev` | Offline (`ERR_NGROK_3200`). |
-| Postgres `botrec` | Not available. This box has the PostgreSQL 17 *client* only; there is no server, no cluster, and no database to query. |
+| Postgres `botiny` | Not available. This box has the PostgreSQL 17 *client* only; there is no server, no cluster, and no database to query. |
 
 Live catalogue and payment counts could not be refreshed today. The last recorded figures from the mid-October testnet run, after credits, promo-v4, MCP and the data feed were shipped:
 
@@ -81,7 +81,7 @@ flowchart LR
     Dash["/dashboard"]
     Click["/c /r short links"]
   end
-  PG[(Postgres + pgvector<br/>botrec)]
+  PG[(Postgres + pgvector<br/>botiny)]
   Relayer[EIP-3009 relayer<br/>or x402.org fallback]
   Crawl[Crawler worker]
   Bots --> Rec
@@ -140,7 +140,7 @@ The API binds to loopback (`127.0.0.1` / `::1`) and is meant to be reached throu
 ## Quick start
 
 ```bash
-# Postgres 17 + pgvector; database botrec (user bot/bot). Tests use botrec_test.
+# Postgres 17 + pgvector; database botiny (role bot/bot). Tests use botiny_test.
 cd api && npm install
 npm run seed                 # seed catalogue (31 fixture entries, each with a source URL)
 npm test                     # mock payments, isolated test DB
@@ -166,7 +166,7 @@ Public / bot-facing (rate-limited; some paywalled):
 - `POST /mcp` — MCP streamable HTTP (GET/DELETE return 405)
 - `GET /v1/feed/tiers`, `POST /v1/feed/subscribe`, `GET /v1/feed/listings`, `GET /v1/feed/changes`, `GET /v1/feed/me`
 - `GET /c/:code`, `GET /r/:token`, `POST /v1/proofs`
-- `GET /.well-known/botsource-keys` — JWKS for click tokens (historical path name; do not change without a compatibility plan)
+- `GET /.well-known/botiny-keys` — JWKS for click tokens
 
 Advertiser (API key or SIWE session):
 
@@ -195,4 +195,4 @@ A Docker daemon listening on `0.0.0.0:2375` was reported during the security rev
 
 ## Licence and name
 
-Earlier working names were **botsource** and **bot-rec-market**. Some package names, the click JWKS path, and the crawler User-Agent still use those strings so existing clients and tests keep working. The product and this repository are **Botiny**.
+The product and this repository are **Botiny**.

@@ -2,7 +2,7 @@
 >
 # Security audit fixes, 2026-10-13
 
-Scope: the Botiny repository (api, crawler, click-server integration), then at `/workspace/bot-rec-market` on the build box. x402 verification and EIP-3009 replay
+Scope: the Botiny repository (api, crawler, click-server integration) on the build box. x402 verification and EIP-3009 replay
 protection are unchanged: the nonce is still reserved in the recommend transaction, the hashed response and ranking
 are untouched, and every logged request still replays MATCH (524/524 after deploy).
 

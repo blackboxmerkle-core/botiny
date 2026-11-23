@@ -1,7 +1,7 @@
 import { q } from "./db";
 import { safeFetch } from "./safe-fetch";
 /** Identifying UA with contact URL. */
-export const UA = process.env.CRAWLER_UA ?? "botsource-crawler/0.1 (+https://github.com/blackboxmerkle-core/botsource; bot-service discovery; contact via repo issues)";
+export const UA = process.env.CRAWLER_UA ?? "BotinyCrawler/0.1 (+https://github.com/blackboxmerkle-core/botiny; bot-service discovery; contact via repo issues)";
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 /** Per-host politeness: serialise by host using crawl_hosts.next_allowed_at (works across workers). */
@@ -37,7 +37,7 @@ export async function robotsAllowed(url: string): Promise<boolean> {
   return isAllowed(row.robots_txt ?? "", u.pathname + u.search);
 }
 /** Minimal robots.txt matcher: groups for our UA token or '*', longest match wins, Allow beats Disallow on tie. */
-export function isAllowed(robots: string, path: string, agent = "botsource-crawler"): boolean {
+export function isAllowed(robots: string, path: string, agent = "BotinyCrawler"): boolean {
   const groups: { agents: string[]; rules: [string, string][] }[] = [];
   let cur: any = null, lastWasAgent = false;
   for (const raw of robots.split(/\r?\n/)) {
@@ -47,7 +47,8 @@ export function isAllowed(robots: string, path: string, agent = "botsource-crawl
     if (k === "user-agent") { if (!cur || !lastWasAgent) { cur = { agents: [], rules: [] }; groups.push(cur); } cur.agents.push(v.toLowerCase()); lastWasAgent = true; }
     else { lastWasAgent = false; if (cur && (k === "allow" || k === "disallow")) cur.rules.push([k, v]); }
   }
-  const mine = groups.filter(g => g.agents.some(a => a !== "*" && agent.toLowerCase().includes(a)));
+  const tokens = [agent, "BotinyCrawler", "botsource-crawler"]; // last: previous UA token
+  const mine = groups.filter(g => g.agents.some(a => a !== "*" && tokens.some(t => t.toLowerCase().includes(a))));
   const use = mine.length ? mine : groups.filter(g => g.agents.includes("*"));
   let best: [string, number] = ["allow", -1];
   for (const g of use) for (const [k, v] of g.rules) {

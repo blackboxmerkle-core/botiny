@@ -7,7 +7,7 @@ export function assertTestDbUrl(url: string | undefined) {
   if (!url || !dbNameOf(url).endsWith("_test")) throw new Error(`refusing to run tests against non-_test database ${url ? dbNameOf(url) || "(unparseable)" : "(DATABASE_URL unset)"}`);
 }
 if (process.env.NODE_TEST_CONTEXT) assertTestDbUrl(process.env.DATABASE_URL);
-export const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL ?? "postgres://bot:bot@localhost:5432/botrec" });
+export const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL ?? "postgres://bot:bot@localhost:5432/botiny" });
 if (process.env.NODE_TEST_CONTEXT) pool.on("connect", c => { c.query("SELECT current_database() d").then(r => { if (!String(r.rows[0].d).endsWith("_test")) { console.error("connected to non-_test db in tests; exiting"); process.exit(1); } }).catch(() => {}); });
 export async function migrate() {
   await pool.query(readFileSync(join(__dirname, "..", "db", "schema.sql"), "utf8"));

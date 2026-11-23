@@ -4,7 +4,7 @@ TypeScript worker that discovers bot-consumable services and normalises them int
 
 It shares the API's Postgres database (it reads `../api/.env`) and reuses `api/src` for listing inserts.
 
-The npm package name is still `botsource-crawler` (historical). The default User-Agent is still `botsource-crawler/0.1 (+https://github.com/blackboxmerkle-core/botsource; …)` so existing robots.txt rules keep matching. That string should be updated to the `botiny` repo URL when feature work resumes; until then, override it with `CRAWLER_UA` if you need the new name on the wire.
+The npm package name is `botiny-crawler`. The default User-Agent is `BotinyCrawler/0.1 (+https://github.com/blackboxmerkle-core/botiny; …)`.
 
 ## Sources
 
@@ -15,7 +15,7 @@ Outbound HTTP uses the shared SSRF-safe `safeFetch()`: http/https only, no useri
 ## Run
 
 ```bash
-npm test                            # isolated botrec_test, mock payments
+npm test                            # isolated botiny_test, mock payments
 npm run worker                      # queue worker + scheduler (also started by api/scripts/supervise.sh)
 npm run crawl -- sync mcp-registry 3
 npm run crawl -- postprocess        # score + dedupe + probe + publish
